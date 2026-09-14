@@ -105,3 +105,24 @@ Thumbnail uses **`product_image_1` only** (no multi-image / variation-image colu
 - **Lazada / Blibli / Amazon / Alibaba**: parsed from public HTML (Open Graph / JSON-LD / embedded page data), with Playwright fallback.
 - **Shopee**: Camoufox persistent profile + human simulation + API intercept, with DOM fallback. Run `setup-session` once. Chrome `--use-open-chrome --active-tab` remains as fallback.
 - Supported URL hosts include `tokopedia.com`, `shopee.*`, `lazada.*`, `blibli.com`, `amazon.*`, `alibaba.com`, `1688.com`.
+
+## Ubuntu Server
+
+Camoufox runs on Linux. On a headless VPS it uses **Xvfb** (`headless="virtual"`) automatically.
+
+```bash
+sudo apt update
+sudo apt install -y xvfb fonts-liberation
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+playwright install chromium
+python -m camoufox fetch
+```
+
+Login Shopee still needs a screen (captcha). Either:
+
+1. Run `setup-session` on a desktop PC, then copy `output/shopee-profile` to the server, or
+2. Install VNC / a desktop on Ubuntu, set `DISPLAY`, and run `setup-session` there.
+
+Keep `SHOPEE_HEADLESS=auto` (default). Override with `virtual` to force Xvfb, or `false` if a real display/VNC is attached.

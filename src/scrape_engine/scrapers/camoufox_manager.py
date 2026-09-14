@@ -3,13 +3,54 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import platform
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FINGERPRINT_FILE = "fingerprint.json"
+HeadlessMode = bool | Literal["virtual"]
+
+
+def camoufox_os() -> Literal["windows", "macos", "linux"]:
+    raw = os.getenv("SHOPEE_OS", "").strip().lower()
+    if raw in {"windows", "macos", "linux"}:
+        return raw  # type: ignore[return-value]
+    system = platform.system().lower()
+    if system.startswith("win"):
+        return "windows"
+    if system == "darwin":
+        return "macos"
+    return "linux"
+
+
+def has_display() -> bool:
+    if camoufox_os() in {"windows", "macos"}:
+        return True
+    return bool(os.getenv("DISPLAY") or os.getenv("WAYLAND_DISPLAY"))
+
+
+def shopee_headless(headed: bool | None = None) -> HeadlessMode:
+    """Resolve Camoufox headless mode.
+
+    Linux servers without a desktop use ``virtual`` (Xvfb). Windows/macOS keep a
+    real window unless ``SHOPEE_HEADLESS=true``.
+    """
+    if headed is True:
+        return False
+
+    raw = os.getenv("SHOPEE_HEADLESS", "auto").strip().lower()
+    if raw in {"0", "false", "no", "headed"}:
+        return False
+    if raw in {"1", "true", "yes"}:
+        return True
+    if raw in {"virtual", "xvfb"}:
+        return "virtual"
+    if camoufox_os() == "linux" and not has_display():
+        return "virtual"
+    return False
 
 
 def profile_dir() -> Path:
@@ -25,12 +66,6 @@ def profile_exists() -> bool:
     if not path.is_dir():
         return False
     return any(path.iterdir())
-
-
-def shopee_headless(headed: bool | None = None) -> bool:
-    if headed is not None:
-        return not headed
-    return os.getenv("SHOPEE_HEADLESS", "false").strip().lower() in {"1", "true", "yes"}
 
 
 class CamoufoxManager:
@@ -56,12 +91,13 @@ class CamoufoxManager:
             dest = profile_dir()
             dest.mkdir(parents=True, exist_ok=True)
             fingerprint_path = dest / FINGERPRINT_FILE
+            target_os = camoufox_os()
             launch_kwargs: dict[str, Any] = {
                 "headless": shopee_headless(headed),
                 "persistent_context": True,
                 "user_data_dir": str(dest),
                 "humanize": True,
-                "os": "windows",
+                "os": target_os,
                 "locale": "id-ID",
                 "enable_cache": True,
             }
@@ -83,7 +119,7 @@ class CamoufoxManager:
         try:
             from camoufox.utils import launch_options
 
-            opts = launch_options(user_data_dir=str(dest), os="windows", locale="id-ID")
+            opts = launch_options(user_data_dir=str(dest), os=camoufox_os(), locale="id-ID")
             path.write_text(json.dumps(opts, default=str), encoding="utf-8")
         except Exception:
             return

@@ -7,7 +7,14 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from scrape_engine.scrapers.camoufox_manager import camoufox_manager, profile_dir, profile_exists
+from scrape_engine.scrapers.camoufox_manager import (
+    camoufox_manager,
+    camoufox_os,
+    has_display,
+    profile_dir,
+    profile_exists,
+    shopee_headless,
+)
 from scrape_engine.scrapers.humanize import human_delay, simulate_human_activity
 
 SESSION_FILE = "session.json"
@@ -86,6 +93,9 @@ def session_status() -> dict[str, Any]:
         "browser_open": camoufox_manager.is_open,
         "updated_at": data.get("updated_at"),
         "profile_dir": str(profile_dir()),
+        "os": camoufox_os(),
+        "headless": shopee_headless(),
+        "has_display": has_display(),
     }
 
 
@@ -107,6 +117,14 @@ def _has_login_cookie(context: Any) -> bool:
 
 def setup_session(*, timeout_ms: int = 10 * 60 * 1000) -> dict[str, Any]:
     """Open a headed Camoufox window so the user can log in once (persistent profile)."""
+    if camoufox_os() == "linux" and not has_display():
+        return {
+            "success": False,
+            "error": (
+                "setup-session butuh layar (login + captcha). Di Ubuntu Server: "
+                "login di PC lalu salin folder output/shopee-profile, atau pasang VNC/Xvfb+DISPLAY."
+            ),
+        }
     camoufox_manager.close()
     captured: dict[str, Any] = {"success": False}
     with camoufox_manager.open_page(headed=True) as (page, context):
