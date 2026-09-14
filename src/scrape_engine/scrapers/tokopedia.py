@@ -1,17 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
+from html import unescape
 from typing import Any
 from urllib.parse import urlparse
 
 import httpx
 
-from scrape_engine.detect import canonicalize_product_url, is_product_url
+from scrape_engine.detect import canonicalize_product_url, is_listing_url, is_product_url
 from scrape_engine.models import Product, Variant
 from scrape_engine.scrapers.base import BaseScraper
 from scrape_engine.scrapers.browser import goto_resilient, launch_page
 from scrape_engine.scrapers.common import product_from_meta_and_ld
+from scrape_engine.scrapers.humanize import human_delay, simulate_human_activity
+
+log = logging.getLogger(__name__)
 
 DEFAULT_HEADERS = {
     "User-Agent": (
@@ -251,6 +256,9 @@ def product_from_tokopedia_cache(cache: dict[str, Any], source_url: str, html: s
         m = re.search(r'<meta\s+property="og:title"\s+content="([^"]*)"', html, flags=re.I)
         if m:
             name = m.group(1).split("|")[0].strip()
+    if (not name or name == "Unknown Product") and isinstance(basic, dict) and basic.get("alias"):
+        slug = re.sub(r"-\d+$", "", str(basic["alias"]))
+        name = re.sub(r"[-_]+", " ", slug).strip().title()
     if not name:
         name = "Unknown Product"
 
@@ -258,8 +266,41 @@ def product_from_tokopedia_cache(cache: dict[str, Any], source_url: str, html: s
     if isinstance(basic, dict) and basic.get("url"):
         final_url = str(basic["url"])
 
-    if not variants:
-        variants = [Variant(currency="IDR", weight=weight)]
+    if not variants or all(v.price is None for v in variants):
+        snap_nodes = _entities_by_type(cache, "pdpContentSnapshotPrice")
+        snap = resolve_refs(cache, snap_nodes[0]) if snap_nodes else {}
+        if not isinstance(snap, dict):
+            snap = {}
+        selling = _parse_rp(snap.get("value") or snap.get("priceFmt"))
+        original = _parse_rp(snap.get("slashPriceFmt"))
+        if original is None and selling is not None:
+            original, selling = selling, None
+        elif original is not None and selling is not None and original <= selling:
+            original, selling = selling, None
+        stock_nodes = _entities_by_type(cache, "pdpContentSnapshotStock")
+        stock_snap = resolve_refs(cache, stock_nodes[0]) if stock_nodes else {}
+        stock_val = _parse_rp(stock_snap.get("value") if isinstance(stock_snap, dict) else None)
+        sku = None
+        if isinstance(basic, dict):
+            sku = str(basic.get("ttsSKUID") or "") or None
+        if not variants:
+            variants = [
+                Variant(
+                    price=original,
+                    discount=selling,
+                    currency="IDR",
+                    stock=stock_val,
+                    sku=sku,
+                    weight=weight,
+                )
+            ]
+        else:
+            variants[0].price = original
+            variants[0].discount = selling
+            if variants[0].stock is None:
+                variants[0].stock = stock_val
+            if not variants[0].sku:
+                variants[0].sku = sku
 
     long_desc = description
     if long_desc and "<" not in long_desc:
@@ -275,6 +316,64 @@ def product_from_tokopedia_cache(cache: dict[str, Any], source_url: str, html: s
         currency="IDR",
         variants=variants,
     )
+
+
+def listing_items_from_cache(cache: dict[str, Any], *, limit: int = 10) -> list[dict[str, Any]]:
+    """Parse Tokopedia search/find ``searchProductV5Product`` nodes (BigSeller listing)."""
+    items: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for raw in cache.values():
+        if not isinstance(raw, dict) or raw.get("__typename") != "searchProductV5Product":
+            continue
+        node = resolve_refs(cache, raw)
+        if not isinstance(node, dict):
+            continue
+        url = canonicalize_product_url(unescape(str(node.get("url") or "")))
+        if not is_product_url(url) or url in seen:
+            continue
+        seen.add(url)
+        price_node = node.get("price") if isinstance(node.get("price"), dict) else {}
+        media = node.get("mediaURL") if isinstance(node.get("mediaURL"), dict) else {}
+        items.append(
+            {
+                "name": str(node.get("name") or "").strip(),
+                "url": url,
+                "price": _parse_rp(price_node.get("number") or price_node.get("text")),
+                "image": _clean_image(str(media.get("image") or media.get("image300") or "") or None),
+            }
+        )
+        if len(items) >= limit:
+            break
+    return items
+
+
+def listing_urls_from_html(html: str, *, limit: int = 10) -> list[str]:
+    found: list[str] = []
+    seen: set[str] = set()
+    for raw in re.findall(r"https://(?:www\.)?tokopedia\.com/[^\s\"'<>]+", html or ""):
+        url = canonicalize_product_url(unescape(raw))
+        if not is_product_url(url) or url in seen:
+            continue
+        seen.add(url)
+        found.append(url)
+        if len(found) >= limit:
+            break
+    return found
+
+
+def collect_listing_product_urls_from_html(html: str, *, limit: int = 10) -> list[str]:
+    cache = _extract_tokopedia_cache(html) or {}
+    items = listing_items_from_cache(cache, limit=limit)
+    urls = [row["url"] for row in items if row.get("url")]
+    if len(urls) >= min(3, limit) or urls:
+        extra = listing_urls_from_html(html, limit=limit)
+        for url in extra:
+            if url not in urls:
+                urls.append(url)
+            if len(urls) >= limit:
+                break
+        return urls[:limit]
+    return listing_urls_from_html(html, limit=limit)
 
 
 def _fetch_html(url: str, timeout_s: float = 45.0) -> tuple[str, str]:
@@ -297,6 +396,138 @@ def _extract_tokopedia_cache(html: str) -> dict[str, Any] | None:
     return None
 
 
+PDP_CACHE_READY = """() => {
+  const c = window.__cache;
+  if (!c || typeof c !== 'object') return false;
+  return Object.values(c).some(
+    (v) => v && typeof v === 'object' && v.__typename === 'pdpBasicInfo'
+  );
+}"""
+
+LISTING_CACHE_READY = """() => {
+  const c = window.__cache;
+  if (!c || typeof c !== 'object') return false;
+  return Object.values(c).some(
+    (v) => v && typeof v === 'object' && v.__typename === 'searchProductV5Product'
+  );
+}"""
+
+
+def _read_page_cache(page: Any) -> tuple[dict[str, Any] | None, str, str]:
+    html = page.content()
+    cache: dict[str, Any] | None = None
+    try:
+        embedded = page.evaluate(
+            """() => {
+              const c = window.__cache;
+              if (!c || typeof c !== 'object') return null;
+              const out = {};
+              for (const [k, v] of Object.entries(c)) {
+                if (!v || typeof v !== 'object') continue;
+                const t = v.__typename || '';
+                if (
+                  t.startsWith('pdp') ||
+                  t.startsWith('searchProduct') ||
+                  t.startsWith('SearchProduct')
+                ) {
+                  out[k] = v;
+                }
+              }
+              return Object.keys(out).length ? out : null;
+            }"""
+        )
+        if isinstance(embedded, dict) and embedded:
+            cache = embedded
+    except Exception as exc:
+        log.warning("Tokopedia window.__cache evaluate failed: %s", exc)
+        cache = None
+    if not cache:
+        cache = _extract_tokopedia_cache(html)
+    return cache, html, str(page.url or "")
+    html = page.content()
+    cache: dict[str, Any] | None = None
+    try:
+        embedded = page.evaluate(
+            """() => (window.__cache && typeof window.__cache === 'object') ? window.__cache : null"""
+        )
+        if isinstance(embedded, dict) and embedded:
+            cache = embedded
+    except Exception:
+        cache = None
+    if not cache:
+        cache = _extract_tokopedia_cache(html)
+    return cache, html, str(page.url or "")
+
+
+def _cache_ready(cache: dict[str, Any] | None, wait_js: str) -> bool:
+    if not cache:
+        return False
+    if "pdpBasicInfo" in wait_js:
+        return bool(_entities_by_type(cache, "pdpBasicInfo"))
+    if "searchProductV5Product" in wait_js:
+        return bool(_entities_by_type(cache, "searchProductV5Product"))
+    return False
+
+
+def _navigate_tokopedia_page(page: Any, url: str, timeout_ms: int, wait_js: str) -> tuple[dict[str, Any] | None, str, str]:
+    nav_timeout = max(timeout_ms, 90_000)
+    last: tuple[dict[str, Any] | None, str, str] = (None, "", url)
+    page.goto(url, wait_until="domcontentloaded", timeout=nav_timeout)
+    try:
+        page.wait_for_timeout(2000)
+        last = _read_page_cache(page)
+        if _cache_ready(last[0], wait_js):
+            return last
+        simulate_human_activity(page, rounds=1)
+        last = _read_page_cache(page)
+        if _cache_ready(last[0], wait_js):
+            return last
+        try:
+            page.wait_for_function(
+                wait_js,
+                timeout=min(max(timeout_ms - 8000, 12000), 40000),
+            )
+        except Exception:
+            pass
+        last = _read_page_cache(page)
+    except Exception as exc:
+        log.warning("Tokopedia Camoufox navigation interrupted: %s", exc)
+    return last
+
+
+def _open_tokopedia_camoufox(
+    url: str,
+    *,
+    headed: bool | None,
+    timeout_ms: int,
+    wait_js: str,
+) -> tuple[dict[str, Any] | None, str, str]:
+    from scrape_engine.scrapers.camoufox_manager import camoufox_manager, camoufox_os, shopee_headless
+
+    try:
+        with camoufox_manager.open_page(headed=headed) as (page, _context):
+            return _navigate_tokopedia_page(page, url, timeout_ms, wait_js)
+    except Exception as exc:
+        log.warning("Persistent Camoufox unavailable for Tokopedia (%s); using ephemeral browser.", exc)
+
+    from camoufox.sync_api import Camoufox
+
+    with Camoufox(
+        headless=shopee_headless(headed),
+        humanize=True,
+        os=camoufox_os(),
+        locale="id-ID",
+    ) as browser:
+        page = browser.new_page()
+        try:
+            return _navigate_tokopedia_page(page, url, timeout_ms, wait_js)
+        finally:
+            try:
+                page.close()
+            except Exception:
+                pass
+
+
 def _product_has_price(product: Product) -> bool:
     if product.price is not None:
         return True
@@ -307,12 +538,50 @@ def _product_usable(product: Product | None) -> bool:
     if product is None:
         return False
     name = (product.name or "").strip().lower()
-    if not name or name in {"unknown product", "tokopedia", "tokopedia - jual beli online"}:
-        return False
-    return True
+    good_name = bool(name) and name not in {"unknown product", "tokopedia", "tokopedia - jual beli online"}
+    return good_name or _product_has_price(product)
 
 
 class TokopediaScraper(BaseScraper):
+    def collect_listing_urls(
+        self,
+        url: str,
+        *,
+        limit: int = 10,
+        headed: bool = False,
+        timeout_ms: int = 60_000,
+        cdp_url: str | None = None,
+        active_tab: bool = False,
+    ) -> list[str]:
+        url = canonicalize_product_url(url)
+        if not is_listing_url(url):
+            raise RuntimeError(f"Not a Tokopedia listing URL: {url}")
+
+        html = ""
+        if cdp_url:
+            html = self._html_via_cdp(url, headed=headed, timeout_ms=timeout_ms, cdp_url=cdp_url, active_tab=active_tab)
+        else:
+            try:
+                _cache, html, _final = _open_tokopedia_camoufox(
+                    url,
+                    headed=headed or None,
+                    timeout_ms=timeout_ms,
+                    wait_js=LISTING_CACHE_READY,
+                )
+            except Exception:
+                html = ""
+
+        urls = collect_listing_product_urls_from_html(html, limit=limit)
+        if urls:
+            return urls[:limit]
+
+        try:
+            _final, html = _fetch_html(url, timeout_s=timeout_ms / 1000)
+            urls = collect_listing_product_urls_from_html(html, limit=limit)
+        except Exception:
+            urls = []
+        return urls[:limit]
+
     def scrape(
         self,
         url: str,
@@ -328,61 +597,55 @@ class TokopediaScraper(BaseScraper):
         html = ""
         final_url = url
         cache: dict[str, Any] | None = None
+        camoufox_error: str | None = None
 
-        # Primary: HTTP fetch of SSR page (more reliable than Chromium HTTP/2 on Tokopedia)
-        try:
-            final_url, html = _fetch_html(url, timeout_s=timeout_ms / 1000)
-            final_url = canonicalize_product_url(final_url or url)
-            cache = _extract_tokopedia_cache(html)
-        except Exception:
-            cache = None
-
-        if cache and _entities_by_type(cache, "pdpBasicInfo"):
-            product = product_from_tokopedia_cache(cache, final_url or url, html=html)
-            if _product_usable(product) and _product_has_price(product):
-                return product
-
-        # Fallback: Playwright (BigSeller-style wait for PDP cache)
-        try:
-            with launch_page(
+        if cdp_url:
+            cache, html, final_url = self._cache_via_cdp(
+                url,
                 headed=headed,
+                timeout_ms=timeout_ms,
                 cdp_url=cdp_url,
-                reuse_existing_page=active_tab,
-                url_hint=url,
-            ) as (_p, _browser, page, _context, _owns_page):
-                goto_resilient(page, url, timeout_ms=timeout_ms)
-                try:
-                    page.wait_for_function(
-                        """() => {
-                          const c = window.__cache;
-                          if (!c || typeof c !== 'object') return false;
-                          return Object.values(c).some(
-                            (v) => v && typeof v === 'object' && v.__typename === 'pdpBasicInfo'
-                          );
-                        }""",
-                        timeout=min(max(timeout_ms - 5000, 8000), 40000),
-                    )
-                except Exception:
-                    page.wait_for_timeout(4000)
-                final_url = canonicalize_product_url(page.url or url)
-                html = page.content()
-                cache = _extract_tokopedia_cache(html)
-                if not cache:
-                    embedded = page.evaluate(
-                        """() => {
-                          if (window.__cache && typeof window.__cache === 'object') return window.__cache;
-                          return null;
-                        }"""
-                    )
-                    if isinstance(embedded, dict):
-                        cache = embedded
-        except Exception:
-            cache = cache or None
+                active_tab=active_tab,
+            )
+        else:
+            try:
+                cache, html, final_url = _open_tokopedia_camoufox(
+                    url,
+                    headed=headed or None,
+                    timeout_ms=timeout_ms,
+                    wait_js=PDP_CACHE_READY,
+                )
+            except Exception as exc:
+                camoufox_error = str(exc)
+                log.warning("Tokopedia Camoufox scrape failed: %s", exc)
+                cache, html, final_url = None, "", url
 
+        final_url = canonicalize_product_url(final_url or url)
+        priced: Product | None = None
         if cache and _entities_by_type(cache, "pdpBasicInfo"):
-            product = product_from_tokopedia_cache(cache, final_url or url, html=html)
-            if _product_usable(product):
-                return product
+            candidate = product_from_tokopedia_cache(cache, final_url, html=html)
+            if _product_usable(candidate):
+                if _product_has_price(candidate):
+                    return candidate
+                priced = candidate
+
+        try:
+            http_url, http_html = _fetch_html(url, timeout_s=timeout_ms / 1000)
+            http_url = canonicalize_product_url(http_url or url)
+            http_cache = _extract_tokopedia_cache(http_html)
+            if http_cache and _entities_by_type(http_cache, "pdpBasicInfo"):
+                product = product_from_tokopedia_cache(http_cache, http_url, html=http_html)
+                if _product_usable(product) and _product_has_price(product):
+                    return product
+                if _product_usable(product) and priced is None:
+                    priced = product
+                    html = http_html
+                    final_url = http_url
+        except Exception:
+            pass
+
+        if priced is not None:
+            return priced
 
         meta_product = product_from_meta_and_ld(html or "", final_url or url, default_currency="IDR")
         if _product_usable(meta_product) and meta_product is not None:
@@ -391,7 +654,58 @@ class TokopediaScraper(BaseScraper):
         host = urlparse(final_url or url).netloc
         if "tokopedia" not in host.lower():
             raise RuntimeError(f"Not a Tokopedia product page: {final_url or url}")
+        extra = f" Camoufox: {camoufox_error}" if camoufox_error else ""
         raise RuntimeError(
             "Tokopedia PDP tidak ter-parse (bukan halaman produk, atau diblokir anti-bot). "
-            f"URL: {final_url or url}"
+            f"URL: {final_url or url}{extra}"
         )
+
+    def _html_via_cdp(
+        self,
+        url: str,
+        *,
+        headed: bool,
+        timeout_ms: int,
+        cdp_url: str,
+        active_tab: bool,
+    ) -> str:
+        try:
+            with launch_page(
+                headed=headed or True,
+                cdp_url=cdp_url,
+                reuse_existing_page=active_tab,
+                url_hint=url,
+            ) as (_p, _browser, page, _context, _owns_page):
+                goto_resilient(page, url, timeout_ms=timeout_ms)
+                page.wait_for_timeout(4000)
+                return page.content()
+        except Exception:
+            return ""
+
+    def _cache_via_cdp(
+        self,
+        url: str,
+        *,
+        headed: bool,
+        timeout_ms: int,
+        cdp_url: str,
+        active_tab: bool,
+    ) -> tuple[dict[str, Any] | None, str, str]:
+        try:
+            with launch_page(
+                headed=headed or True,
+                cdp_url=cdp_url,
+                reuse_existing_page=active_tab,
+                url_hint=url,
+            ) as (_p, _browser, page, _context, _owns_page):
+                goto_resilient(page, url, timeout_ms=timeout_ms)
+                try:
+                    page.wait_for_function(
+                        PDP_CACHE_READY,
+                        timeout=min(max(timeout_ms - 5000, 8000), 40000),
+                    )
+                except Exception:
+                    page.wait_for_timeout(4000)
+                return _read_page_cache(page)
+        except Exception:
+            return None, "", url

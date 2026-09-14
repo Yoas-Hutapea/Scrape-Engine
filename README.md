@@ -45,6 +45,9 @@ DB_PASSWORD=...
 # Scrape → insert PostgreSQL only (default)
 py -m scrape_engine.cli scrape "https://www.tokopedia.com/..."
 
+# Tokopedia listing /find (BigSeller-style: collect PDPs then scrape each)
+py -m scrape_engine.cli scrape "https://www.tokopedia.com/find/baterai-alkaline-aa" --listing-limit 10
+
 # Also export files
 py -m scrape_engine.cli scrape "https://www.tokopedia.com/..." --format both --out output
 
@@ -101,7 +104,7 @@ Thumbnail uses **`product_image_1` only** (no multi-image / variation-image colu
 ## Notes
 
 - Use reasonably (rate limits, marketplace Terms of Service).
-- **Tokopedia** usually returns full variants/prices/stock from public HTML.
+- **Tokopedia**: Camoufox first (same stealth stack as Shopee), then HTTP fallback. A `/find/` or `/search` listing URL is expanded then each PDP is scraped.
 - **Lazada / Blibli / Amazon / Alibaba**: parsed from public HTML (Open Graph / JSON-LD / embedded page data), with Playwright fallback.
 - **Shopee**: Camoufox persistent profile + human simulation + API intercept, with DOM fallback. Run `setup-session` once. Chrome `--use-open-chrome --active-tab` remains as fallback.
 - Supported URL hosts include `tokopedia.com`, `shopee.*`, `lazada.*`, `blibli.com`, `amazon.*`, `alibaba.com`, `1688.com`.

@@ -118,7 +118,7 @@ def canonicalize_product_url(url: str) -> str:
         (k, v)
         for k, v in parse_qsl(parsed.query, keep_blank_values=True)
         if not k.lower().startswith("utm_")
-        and k.lower() not in {"gclid", "fbclid", "srsltid", "spm"}
+        and k.lower() not in {"gclid", "fbclid", "srsltid", "spm", "extparam"}
     ]
     return urlunparse((parsed.scheme, parsed.netloc, path, "", urlencode(query), ""))
 
@@ -159,4 +159,32 @@ def is_product_url(url: str) -> bool:
     if marketplace is Marketplace.ALIBABA:
         return "/product-detail/" in joined or "/offer/" in joined or bool(re.search(r"/\d+\.html$", joined))
 
+    return False
+
+
+def is_listing_url(url: str) -> bool:
+    """True for marketplace search/find listing pages (BigSeller-style bulk scrape)."""
+    try:
+        marketplace = detect_marketplace(url)
+    except UnsupportedMarketplaceError:
+        return False
+
+    parsed = urlparse(canonicalize_product_url(url))
+    path = (parsed.path or "").lower().strip("/")
+    segments = [s for s in path.split("/") if s]
+    query = {k.lower(): v for k, v in parse_qsl(parsed.query, keep_blank_values=True)}
+    first = segments[0] if segments else ""
+
+    if marketplace is Marketplace.TOKOPEDIA:
+        return first in {"find", "search"}
+    if marketplace is Marketplace.SHOPEE:
+        return first == "search" or bool(query.get("keyword"))
+    if marketplace is Marketplace.LAZADA:
+        return first in {"catalog", "tag"} or bool(query.get("q"))
+    if marketplace is Marketplace.BLIBLI:
+        return first in {"cari", "search"} or bool(query.get("s"))
+    if marketplace is Marketplace.AMAZON:
+        return first in {"s", "gp"} and bool(query.get("k") or query.get("keywords"))
+    if marketplace is Marketplace.ALIBABA:
+        return "wholesale" in path or first in {"trade", "catalog"}
     return False

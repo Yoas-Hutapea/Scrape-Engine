@@ -54,7 +54,7 @@ def init_db() -> None:
 
 @app.command("scrape")
 def scrape(
-    url_or_file: str = typer.Argument(..., help="Product URL or text file with one URL per line"),
+    url_or_file: str = typer.Argument(..., help="Product URL, listing URL (/find|/search), or text file with one URL per line"),
     format: str = typer.Option(
         "none",
         "--format",
@@ -87,6 +87,11 @@ def scrape(
     ),
     timeout: int = typer.Option(60_000, "--timeout", help="Page timeout in ms"),
     delay: float = typer.Option(1.0, "--delay", help="Delay between URLs in seconds"),
+    listing_limit: int = typer.Option(
+        10,
+        "--listing-limit",
+        help="Max products to scrape from a Tokopedia /find or /search listing URL",
+    ),
 ) -> None:
     """Scrape product URL(s), insert into PostgreSQL, optionally export XLSX/JSON."""
     fmt = format.lower().strip()
@@ -120,6 +125,7 @@ def scrape(
         cdp_url=cdp_url,
         active_tab=active_tab,
         to_db=to_db,
+        listing_limit=listing_limit,
     )
 
     typer.echo(f"Products scraped: {len(result.products)}")

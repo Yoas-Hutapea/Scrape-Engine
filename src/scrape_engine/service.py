@@ -6,7 +6,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
 
-from scrape_engine.detect import Marketplace, canonicalize_product_url, detect_marketplace, is_product_url
+from scrape_engine.detect import (
+    Marketplace,
+    canonicalize_product_url,
+    detect_marketplace,
+    is_listing_url,
+    is_product_url,
+)
 from scrape_engine.exporters.excel import export_xlsx
 from scrape_engine.exporters.json_out import export_json, rows_as_ordered
 from scrape_engine.models import Product, flatten_products
@@ -58,6 +64,45 @@ class ScrapeService:
             timeout_ms=timeout_ms,
         )
 
+    def expand_listing(
+        self,
+        url: str,
+        *,
+        limit: int = 10,
+        headed: bool = False,
+        timeout_ms: int = 60_000,
+        cdp_url: str | None = None,
+        active_tab: bool = False,
+    ) -> list[str]:
+        marketplace = detect_marketplace(url)
+        limit = max(1, min(int(limit), 30))
+        if marketplace is Marketplace.TOKOPEDIA:
+            return self._scrapers[Marketplace.TOKOPEDIA].collect_listing_urls(  # type: ignore[attr-defined]
+                url,
+                limit=limit,
+                headed=headed,
+                timeout_ms=timeout_ms,
+                cdp_url=cdp_url,
+                active_tab=active_tab,
+            )
+        if marketplace is Marketplace.SHOPEE:
+            from urllib.parse import parse_qs, urlparse
+
+            parsed = urlparse(url)
+            query = parse_qs(parsed.query)
+            keyword = (query.get("keyword") or query.get("q") or [""])[0].strip()
+            if not keyword:
+                parts = [s for s in (parsed.path or "").split("/") if s]
+                if len(parts) >= 2 and parts[0] == "search":
+                    keyword = parts[1]
+            if not keyword:
+                raise RuntimeError(f"Tidak ada kata kunci di URL listing Shopee: {url}")
+            result = self.search_shopee(keyword, limit=limit, timeout_ms=timeout_ms)
+            return [str(item.get("link") or "") for item in (result.get("items") or []) if item.get("link")]
+        raise RuntimeError(
+            "Halaman listing marketplace ini belum didukung (saat ini: Tokopedia /find|/search, Shopee /search)."
+        )
+
     def scrape_url(
         self,
         url: str,
@@ -86,18 +131,49 @@ class ScrapeService:
         delay_sec: float = 1.0,
         cdp_url: str | None = None,
         active_tab: bool = False,
+        listing_limit: int = 10,
     ) -> ScrapeResult:
         result = ScrapeResult()
-        for i, url in enumerate(urls):
+        expanded: list[str] = []
+        for url in urls:
             url = url.strip()
             if not url or url.startswith("#"):
                 continue
             url = canonicalize_product_url(url)
             try:
-                if not is_product_url(url):
-                    raise RuntimeError(
-                        "Bukan URL halaman produk (PDP). Lewati listing/rekomendasi/media."
+                if is_product_url(url):
+                    expanded.append(url)
+                elif is_listing_url(url):
+                    kids = self.expand_listing(
+                        url,
+                        limit=listing_limit,
+                        headed=headed,
+                        timeout_ms=timeout_ms,
+                        cdp_url=cdp_url,
+                        active_tab=active_tab,
                     )
+                    kids = [canonicalize_product_url(k) for k in kids if k]
+                    kids = [k for k in kids if is_product_url(k)]
+                    if not kids:
+                        raise RuntimeError("Tidak ada produk di halaman listing.")
+                    expanded.extend(kids)
+                else:
+                    raise RuntimeError(
+                        "Bukan URL halaman produk (PDP) atau listing (/find, /search)."
+                    )
+            except Exception as exc:
+                result.errors.append({"url": url, "error": str(exc)})
+
+        seen: set[str] = set()
+        unique: list[str] = []
+        for url in expanded:
+            if url in seen:
+                continue
+            seen.add(url)
+            unique.append(url)
+
+        for i, url in enumerate(unique):
+            try:
                 product = self.scrape_url(
                     url,
                     headed=headed,
@@ -108,7 +184,7 @@ class ScrapeService:
                 result.products.append(product)
             except Exception as exc:
                 result.errors.append({"url": url, "error": str(exc)})
-            if i < len(urls) - 1 and delay_sec > 0:
+            if i < len(unique) - 1 and delay_sec > 0:
                 time.sleep(delay_sec)
 
         result.rows = flatten_products(result.products)
@@ -127,6 +203,7 @@ class ScrapeService:
         cdp_url: str | None = None,
         active_tab: bool = False,
         to_db: bool = True,
+        listing_limit: int = 10,
     ) -> ScrapeResult:
         result = self.scrape_many(
             urls,
@@ -135,6 +212,7 @@ class ScrapeService:
             delay_sec=delay_sec,
             cdp_url=cdp_url,
             active_tab=active_tab,
+            listing_limit=listing_limit,
         )
         stamp = basename or datetime.now().strftime("scraped_product_%Y%m%d%H%M%S%f")[:-3]
 

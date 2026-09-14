@@ -1,4 +1,4 @@
-from scrape_engine.detect import Marketplace, canonicalize_product_url, detect_marketplace, is_product_url
+from scrape_engine.detect import Marketplace, canonicalize_product_url, detect_marketplace, is_listing_url, is_product_url
 from scrape_engine.scrapers.shopee import parse_shop_item_ids
 import pytest
 
@@ -51,6 +51,10 @@ def test_is_product_url_filters_listing_pages():
     )
     assert is_product_url("https://shopee.co.id/Router-i.123.456")
     assert not is_product_url("https://shopee.co.id/search?keyword=router")
+    assert is_listing_url("https://www.tokopedia.com/find/baterai-alkaline-aa")
+    assert is_listing_url("https://www.tokopedia.com/search?q=baterai")
+    assert is_listing_url("https://shopee.co.id/search?keyword=router")
+    assert not is_listing_url("https://www.tokopedia.com/shop/router-mikrotik")
 
 
 def test_canonicalize_strips_tokopedia_media_tail():

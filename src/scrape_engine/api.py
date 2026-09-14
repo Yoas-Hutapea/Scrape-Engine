@@ -50,6 +50,12 @@ class ScrapeRequest(BaseModel):
     timeout_ms: int = 60_000
     delay_sec: float = 1.0
     out_dir: str = "output"
+    listing_limit: int = Field(
+        default=10,
+        ge=1,
+        le=30,
+        description="Max product PDPs to scrape from a /find or /search listing URL",
+    )
 
 
 class ScrapeResponse(BaseModel):
@@ -174,6 +180,7 @@ def scrape(body: ScrapeRequest) -> Any:
         cdp_url=body.cdp_url,
         active_tab=body.active_tab,
         to_db=body.to_db,
+        listing_limit=body.listing_limit,
     )
 
     if body.format == ExportFormat.xlsx and result.xlsx_path and not result.errors:

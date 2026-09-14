@@ -42,3 +42,29 @@ def test_product_from_minimal_tokopedia_cache():
     assert product.variants[0].price == 20000
     assert product.variants[0].discount == 15000
     assert product.variants[0].stock == 9
+
+
+def test_product_from_snapshot_price_when_no_variant_children():
+    cache = {
+        "pdpBasicInfo1": {
+            "__typename": "pdpBasicInfo",
+            "url": "https://www.tokopedia.com/shop/item",
+            "weight": 0.25,
+            "ttsSKUID": "sku-1",
+            "alias": "baterai-aa-kecil-123",
+        },
+        "price1": {
+            "__typename": "pdpContentSnapshotPrice",
+            "value": 2500,
+            "priceFmt": "Rp2.500",
+            "slashPriceFmt": "Rp42.500",
+        },
+        "stock1": {"__typename": "pdpContentSnapshotStock", "value": "7"},
+    }
+    html = '<meta property="og:title" content="Baterai AA | Tokopedia">'
+    product = product_from_tokopedia_cache(cache, "https://www.tokopedia.com/shop/item", html=html)
+    assert product.name == "Baterai AA"
+    assert product.variants[0].price == 42500
+    assert product.variants[0].discount == 2500
+    assert product.variants[0].stock == 7
+    assert product.variants[0].sku == "sku-1"
