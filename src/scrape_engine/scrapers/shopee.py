@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from html import unescape
 from pathlib import Path
 from typing import Any
@@ -12,6 +13,7 @@ from scrape_engine.models import Product, Variant
 from scrape_engine.scrapers.base import BaseScraper
 from scrape_engine.scrapers.browser import goto_resilient, launch_page
 from scrape_engine.scrapers.common import meta_content, parse_money, product_from_meta_and_ld
+from scrape_engine.scrapers.humanize import human_delay, simulate_human_activity
 
 CRAWLER_UA = "facebookexternalhit/1.1 (+http://www.facebook.com/externalhit_uatext.php)"
 STORAGE_STATE_PATH = Path("output/.shopee_storage_state.json")
@@ -285,6 +287,262 @@ def _extract_item_from_payload(data: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+REASON_SUCCESS = "SUCCESS"
+REASON_ANTIBOT = "ANTIBOT"
+REASON_EMPTY = "EMPTY_RESULTS"
+REASON_ERROR = "SCRAPE_ERROR"
+
+PDP_API_KEYS = (
+    "/api/v4/pdp/get_pc",
+    "/api/v4/pdp/get",
+    "/api/v4/item/get",
+    "/api/v2/item/get",
+)
+
+SEARCH_API_KEY = "/api/v4/search/search_items"
+
+DOM_PDP_SCRIPT = """() => {
+  const text = document.body?.innerText || '';
+  const lower = text.toLowerCase();
+  const blocked = lower.includes('captcha') || lower.includes('security check')
+    || lower.includes('robot') || location.href.includes('verify');
+  const h1 = document.querySelector('h1')?.innerText?.trim() || '';
+  const ogTitle = document.querySelector('meta[property="og:title"]')?.content || '';
+  let name = h1 || ogTitle.split('|')[0].trim();
+  name = name.replace(/^Jual\\s+/i, '').trim();
+  const priceMatch = text.match(/Rp\\s*[\\d.]+/);
+  const image = document.querySelector('meta[property="og:image"]')?.content
+    || document.querySelector('img[src*="susercontent"]')?.src || '';
+  const description = document.querySelector('meta[property="og:description"]')?.content || '';
+  return {
+    name,
+    price_text: priceMatch ? priceMatch[0] : '',
+    image,
+    description,
+    url: location.href,
+    blocked,
+  };
+}"""
+
+DOM_SEARCH_SCRIPT = """() => {
+  const cards = Array.from(document.querySelectorAll('a[data-sqe="link"], a[href*="-i."]'));
+  const items = [];
+  for (const el of cards) {
+    const candidateDivs = Array.from(el.querySelectorAll('div, span'));
+    let name = '';
+    for (const node of candidateDivs) {
+      const text = node.innerText?.trim() || '';
+      if (text.length > 15 && !text.includes('Rp') && !text.toLowerCase().includes('terjual') && !text.includes('KAB.')) {
+        name = text.split('\\n')[0];
+        break;
+      }
+    }
+    if (!name) {
+      const img = el.querySelector('img');
+      if (img && img.alt && img.alt.length > 10) name = img.alt;
+    }
+    const priceMatch = el.innerText.match(/Rp\\s*([\\d.]+)/);
+    const priceStr = priceMatch ? priceMatch[0] : '';
+    const priceNum = priceStr ? parseInt(priceStr.replace(/[^\\d]/g, ''), 10) : 0;
+    if (name && priceNum > 0) {
+      items.push({ name, price: priceNum, price_str: priceStr, link: el.href || '' });
+    }
+  }
+  return items;
+}"""
+
+
+def map_search_items(items: list[Any], *, limit: int = 3) -> list[dict[str, Any]]:
+    """Map Shopee search_items payload to name/price/link rows (cheapest first)."""
+    products: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        info = item.get("item_basic") if isinstance(item.get("item_basic"), dict) else item
+        if not isinstance(info, dict):
+            continue
+        prices = [
+            p
+            for p in (_price_from_shopee(info.get("price")), _price_from_shopee(info.get("price_min")))
+            if p is not None and p > 0
+        ]
+        price = min(prices) if prices else None
+        name = str(info.get("name") or "").strip()
+        shopid = info.get("shopid") or info.get("shop_id")
+        itemid = info.get("itemid") or info.get("item_id")
+        if not name or price is None or price <= 0 or not shopid or not itemid:
+            continue
+        products.append(
+            {
+                "name": name,
+                "price": price,
+                "price_str": f"Rp{int(round(price)):,}".replace(",", "."),
+                "link": f"https://shopee.co.id/product/{shopid}/{itemid}",
+            }
+        )
+    products.sort(key=lambda row: row["price"])
+    return products[:limit]
+
+
+def product_from_dom_snapshot(data: dict[str, Any], source_url: str) -> Product | None:
+    name = str(data.get("name") or "").strip()
+    name = re.sub(r"^Jual\s+", "", name, flags=re.I).strip()
+    if not name or name in {"Unknown Product", "Shopee Indonesia", "Shopee"}:
+        return None
+    price = parse_money(data.get("price") or data.get("price_text"))
+    image = str(data.get("image") or "").strip()
+    desc = str(data.get("description") or "")
+    canonical = str(data.get("url") or source_url)
+    return Product(
+        name=name,
+        source_link=canonical,
+        long_description=f"<p>{desc}</p>" if desc else "",
+        short_description=desc[:500],
+        images=[image] if image else [],
+        currency="IDR",
+        price=price,
+        variants=[Variant(price=price, currency="IDR")],
+    )
+
+
+def _best_item(captured_items: list[dict[str, Any]]) -> dict[str, Any]:
+    return max(
+        captured_items,
+        key=lambda it: len(it.get("models") or [])
+        + len(it.get("images") or [])
+        + (1 if it.get("title") or it.get("name") else 0),
+    )
+
+
+def _attach_pdp_interceptor(page: Any, captured_items: list[dict[str, Any]]) -> None:
+    def on_response(response: Any) -> None:
+        try:
+            url = response.url
+            if not any(key in url for key in PDP_API_KEYS):
+                return
+            data = response.json()
+            if isinstance(data, dict):
+                item = _extract_item_from_payload(data)
+                if item:
+                    captured_items.append(item)
+        except Exception:
+            return
+
+    page.on("response", on_response)
+
+
+def _attach_search_interceptor(page: Any, state: dict[str, Any]) -> None:
+    def on_response(response: Any) -> None:
+        try:
+            url = response.url
+            if SEARCH_API_KEY not in url:
+                return
+            status = response.status
+            if status in {403, 429}:
+                state["reason"] = REASON_ANTIBOT
+                return
+            if status != 200:
+                return
+            data = response.json()
+            if not isinstance(data, dict):
+                return
+            if data.get("error") not in (0, None, "0"):
+                state["reason"] = REASON_ANTIBOT
+                return
+            items = data.get("items") or []
+            if items:
+                state["items"] = items
+                state["reason"] = REASON_SUCCESS
+            else:
+                state["reason"] = REASON_EMPTY
+        except Exception:
+            return
+
+    page.on("response", on_response)
+
+
+def _in_page_fetch_item(page: Any, shop_id: str, item_id: str) -> dict[str, Any] | None:
+    api_urls = [
+        f"https://shopee.co.id/api/v4/pdp/get_pc?shop_id={shop_id}&item_id={item_id}",
+        f"https://shopee.co.id/api/v4/item/get?shopid={shop_id}&itemid={item_id}",
+    ]
+    for api_url in api_urls:
+        try:
+            result = page.evaluate(
+                """async (apiUrl) => {
+                  const r = await fetch(apiUrl, { credentials: 'include' });
+                  if (!r.ok) return null;
+                  return await r.json();
+                }""",
+                api_url,
+            )
+            if isinstance(result, dict):
+                item = _extract_item_from_payload(result)
+                if item:
+                    return item
+        except Exception:
+            continue
+    return None
+
+
+def _httpx_item(url: str, shop_id: str, item_id: str, timeout_ms: int) -> dict[str, Any] | None:
+    from scrape_engine.scrapers.shopee_session import session_headers
+
+    api_urls = [
+        f"https://shopee.co.id/api/v4/item/get?itemid={item_id}&shopid={shop_id}",
+        f"https://shopee.co.id/api/v4/pdp/get_pc?shop_id={shop_id}&item_id={item_id}",
+    ]
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/122.0.0.0 Safari/537.36"
+        ),
+        "Accept": "application/json",
+        "Referer": url,
+        "X-API-SOURCE": "pc",
+    }
+    headers.update(session_headers())
+    try:
+        with httpx.Client(
+            headers=headers,
+            follow_redirects=True,
+            timeout=timeout_ms / 1000,
+            http2=False,
+        ) as client:
+            for api_url in api_urls:
+                try:
+                    resp = client.get(api_url)
+                    if resp.status_code != 200:
+                        continue
+                    data = resp.json()
+                    if isinstance(data, dict):
+                        item = _extract_item_from_payload(data)
+                        if item and (item.get("title") or item.get("models") or item.get("name")):
+                            return item
+                except Exception:
+                    continue
+    except Exception:
+        return None
+    return None
+
+
+def _crawler_product(url: str, timeout_ms: int) -> Product | None:
+    try:
+        with httpx.Client(
+            headers={"User-Agent": CRAWLER_UA, "Accept": "text/html"},
+            follow_redirects=True,
+            timeout=timeout_ms / 1000,
+            http2=False,
+        ) as client:
+            resp = client.get(url)
+            if resp.status_code == 200 and "og:title" in resp.text:
+                return product_from_crawler_html(resp.text, str(resp.url))
+    except Exception:
+        return None
+    return None
+
+
 class ShopeeScraper(BaseScraper):
     def scrape(
         self,
@@ -295,136 +553,228 @@ class ShopeeScraper(BaseScraper):
         cdp_url: str | None = None,
         active_tab: bool = False,
     ) -> Product:
-        crawler_product: Product | None = None
         shop_id, item_id = parse_shop_item_ids(url)
-
-        # 1) Public crawler HTML (name/description/image/price when exposed)
-        try:
-            with httpx.Client(
-                headers={"User-Agent": CRAWLER_UA, "Accept": "text/html"},
-                follow_redirects=True,
-                timeout=timeout_ms / 1000,
-                http2=False,
-            ) as client:
-                resp = client.get(url)
-                if resp.status_code == 200 and "og:title" in resp.text:
-                    crawler_product = product_from_crawler_html(resp.text, str(resp.url))
-        except Exception:
-            crawler_product = None
-
-        captured_items: list[dict[str, Any]] = []
+        crawler = _crawler_product(url, timeout_ms)
         if shop_id and item_id:
-            api_urls = [
-                f"https://shopee.co.id/api/v4/item/get?itemid={item_id}&shopid={shop_id}",
-                f"https://shopee.co.id/api/v4/pdp/get_pc?shop_id={shop_id}&item_id={item_id}",
-            ]
+            item = _httpx_item(url, shop_id, item_id, timeout_ms)
+            if item:
+                return _parse_shopee_item(item, url)
+
+        if cdp_url:
+            product = self._scrape_via_cdp(
+                url,
+                headed=headed,
+                timeout_ms=timeout_ms,
+                cdp_url=cdp_url,
+                active_tab=active_tab,
+            )
+            if product:
+                return product
+        else:
+            product = self._scrape_via_camoufox(url, headed=headed or None, timeout_ms=timeout_ms)
+            if product:
+                return product
+
+        if crawler and crawler.name not in {"Unknown Product", "Shopee Indonesia"}:
+            return crawler
+
+        hint = (
+            "Untuk Shopee: 1) py -m scrape_engine.cli setup-session  "
+            "2) login + selesaikan captcha  "
+            "3) py -m scrape_engine.cli scrape URL"
+        )
+        raise RuntimeError(f"Shopee blocked automated access (verify/challenge). {hint} URL: {url}")
+
+    def search(
+        self,
+        keyword: str,
+        *,
+        limit: int = 3,
+        headed: bool | None = None,
+        timeout_ms: int = 60_000,
+    ) -> dict[str, Any]:
+        """Search Shopee by keyword and return the cheapest matching products."""
+        from scrape_engine.scrapers.camoufox_manager import camoufox_manager, profile_exists
+        from scrape_engine.scrapers.shopee_session import ensure_warm_session
+
+        keyword = keyword.strip()
+        if not keyword:
+            return {"items": [], "reason": REASON_ERROR, "error": "Keyword kosong."}
+
+        if not profile_exists():
             try:
-                with httpx.Client(
-                    headers={
-                        "User-Agent": (
-                            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                            "AppleWebKit/537.36 (KHTML, like Gecko) "
-                            "Chrome/122.0.0.0 Safari/537.36"
-                        ),
-                        "Accept": "application/json",
-                        "Referer": url,
-                        "X-API-SOURCE": "pc",
-                    },
-                    follow_redirects=True,
-                    timeout=timeout_ms / 1000,
-                    http2=False,
-                ) as client:
-                    for api_url in api_urls:
-                        try:
-                            resp = client.get(api_url)
-                            if resp.status_code != 200:
-                                continue
-                            data = resp.json()
-                            if isinstance(data, dict):
-                                item = _extract_item_from_payload(data)
-                                if item and (item.get("title") or item.get("models")):
-                                    captured_items.append(item)
-                                    break
-                        except Exception:
-                            continue
+                from scrape_engine.scrapers.shopee_session import warm_session
+
+                warm_session(keep_open=True)
             except Exception:
                 pass
+        else:
+            ensure_warm_session()
 
-        if captured_items:
-            best = max(
-                captured_items,
-                key=lambda it: len(it.get("models") or [])
-                + len(it.get("images") or [])
-                + (1 if it.get("title") else 0),
-            )
-            return _parse_shopee_item(best, url)
+        state: dict[str, Any] = {"items": None, "reason": None}
+        try:
+            with camoufox_manager.open_page(headed=headed) as (page, _context):
+                _attach_search_interceptor(page, state)
+                search_url = f"https://shopee.co.id/search?keyword={keyword}"
+                page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
+                simulate_human_activity(page, rounds=1)
+                human_delay(2000, 4000, page)
 
-        # 2) Browser session — full PDP JSON when anti-bot allows
-        # Prefer attaching to your already-open Chrome (cdp_url) so Shopee login is reused.
-        # With active_tab=True, scrape a product page YOU opened manually (no automated goto).
+                deadline = time.time() + min(30, timeout_ms / 1000)
+                while time.time() < deadline:
+                    if state.get("items") or state.get("reason") == REASON_EMPTY:
+                        break
+                    try:
+                        if page.query_selector("li.col-xs-2-4, div[data-sqe='item'], a[data-sqe='link']"):
+                            break
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1000)
+
+                api_items = state.get("items") or []
+                mapped = map_search_items(api_items, limit=limit)
+                if mapped:
+                    return {"items": mapped, "reason": REASON_SUCCESS}
+
+                try:
+                    dom_items = page.evaluate(DOM_SEARCH_SCRIPT) or []
+                except Exception:
+                    dom_items = []
+                if isinstance(dom_items, list) and dom_items:
+                    cleaned: list[dict[str, Any]] = []
+                    for row in dom_items:
+                        if not isinstance(row, dict):
+                            continue
+                        price = parse_money(row.get("price") or row.get("price_str"))
+                        name = str(row.get("name") or "").strip()
+                        link = str(row.get("link") or "")
+                        if name and price and price > 0:
+                            cleaned.append(
+                                {
+                                    "name": name,
+                                    "price": price,
+                                    "price_str": str(row.get("price_str") or f"Rp{int(price):,}".replace(",", ".")),
+                                    "link": link,
+                                }
+                            )
+                    cleaned.sort(key=lambda row: row["price"])
+                    cleaned = cleaned[:limit]
+                    if cleaned:
+                        return {"items": cleaned, "reason": REASON_SUCCESS}
+
+                blocked = False
+                try:
+                    blocked = bool(
+                        page.evaluate(
+                            """() => {
+                              const t = (document.body?.innerText || '').toLowerCase();
+                              return t.includes('captcha') || t.includes('security check')
+                                || t.includes('robot') || location.href.includes('verify');
+                            }"""
+                        )
+                    )
+                except Exception:
+                    blocked = False
+                reason = REASON_ANTIBOT if blocked else (state.get("reason") or REASON_EMPTY)
+                return {"items": [], "reason": reason}
+        except Exception as exc:
+            return {"items": [], "reason": REASON_ERROR, "error": str(exc)}
+
+    def _scrape_via_camoufox(
+        self,
+        url: str,
+        *,
+        headed: bool | None,
+        timeout_ms: int,
+    ) -> Product | None:
+        from scrape_engine.scrapers.camoufox_manager import camoufox_manager, profile_exists
+        from scrape_engine.scrapers.shopee_session import ensure_warm_session
+
+        if profile_exists():
+            ensure_warm_session()
+
+        captured_items: list[dict[str, Any]] = []
+        try:
+            with camoufox_manager.open_page(headed=headed) as (page, _context):
+                _attach_pdp_interceptor(page, captured_items)
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+                simulate_human_activity(page, rounds=1)
+                human_delay(2000, 4000, page)
+
+                deadline = time.time() + min(30, timeout_ms / 1000)
+                while time.time() < deadline:
+                    if captured_items and "verify" not in (page.url or ""):
+                        break
+                    try:
+                        if page.query_selector("h1"):
+                            break
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(1000)
+
+                final_url = page.url or url
+                shop_id, item_id = parse_shop_item_ids(final_url)
+                if not shop_id or not item_id:
+                    shop_id, item_id = parse_shop_item_ids(url)
+                if shop_id and item_id and not captured_items and "verify" not in final_url:
+                    item = _in_page_fetch_item(page, shop_id, item_id)
+                    if item:
+                        captured_items.append(item)
+
+                if captured_items:
+                    return _parse_shopee_item(_best_item(captured_items), final_url)
+
+                try:
+                    snapshot = page.evaluate(DOM_PDP_SCRIPT) or {}
+                except Exception:
+                    snapshot = {}
+                if isinstance(snapshot, dict):
+                    if snapshot.get("blocked"):
+                        return None
+                    product = product_from_dom_snapshot(snapshot, final_url)
+                    if product:
+                        return product
+        except Exception:
+            return None
+        return None
+
+    def _scrape_via_cdp(
+        self,
+        url: str,
+        *,
+        headed: bool,
+        timeout_ms: int,
+        cdp_url: str,
+        active_tab: bool,
+    ) -> Product | None:
+        captured_items: list[dict[str, Any]] = []
         final_url = url
-        storage = None if cdp_url else (str(STORAGE_STATE_PATH) if STORAGE_STATE_PATH.exists() else None)
-        browser_error: str | None = None
-        use_active = bool(active_tab and cdp_url)
-
+        storage = str(STORAGE_STATE_PATH) if STORAGE_STATE_PATH.exists() else None
+        use_active = bool(active_tab)
         try:
             with launch_page(
-                headed=headed or bool(cdp_url),
+                headed=headed or True,
                 storage_state=storage,
                 engine="chromium",
                 cdp_url=cdp_url,
                 reuse_existing_page=use_active,
                 url_hint=url,
-            ) as (
-                _p,
-                _browser,
-                page,
-                context,
-                owns_page,
-            ):
-                def on_response(response) -> None:
-                    try:
-                        u = response.url
-                        if any(
-                            key in u
-                            for key in (
-                                "/api/v4/pdp/get_pc",
-                                "/api/v4/pdp/get",
-                                "/api/v4/item/get",
-                                "/api/v2/item/get",
-                            )
-                        ):
-                            try:
-                                data = response.json()
-                            except Exception:
-                                return
-                            if isinstance(data, dict):
-                                item = _extract_item_from_payload(data)
-                                if item:
-                                    captured_items.append(item)
-                    except Exception:
-                        pass
-
-                page.on("response", on_response)
-
+            ) as (_p, _browser, page, context, owns_page):
+                _attach_pdp_interceptor(page, captured_items)
                 if use_active and not owns_page:
-                    # User already opened the product tab — just reload to re-fire APIs
                     try:
                         page.reload(wait_until="domcontentloaded", timeout=timeout_ms)
                     except Exception:
                         pass
                 elif use_active and owns_page:
-                    # No matching tab yet: open blank tab and wait for user to paste/open URL
-                    # Avoid automated goto which Shopee often blocks even when logged in.
                     raise RuntimeError(
                         "Tidak ada tab Shopee produk yang terbuka. "
-                        "Buka URL produk manual di Chrome debug, pastikan halaman produk tampil "
-                        "(bukan verify), lalu jalankan lagi dengan --use-open-chrome --active-tab."
+                        "Buka URL produk manual di Chrome debug, lalu jalankan lagi "
+                        "dengan --use-open-chrome --active-tab."
                     )
                 else:
                     goto_resilient(page, url, timeout_ms=timeout_ms)
 
-                # Poll until product API is captured or timeout (covers verify challenges)
                 deadline_slices = max(1, int(timeout_ms / 2000))
                 for _ in range(deadline_slices):
                     final_url = page.url
@@ -433,59 +783,23 @@ class ShopeeScraper(BaseScraper):
                     page.wait_for_timeout(2000)
 
                 final_url = page.url
-
-                shop_id, item_id = parse_shop_item_ids(final_url) or parse_shop_item_ids(url)
+                shop_id, item_id = parse_shop_item_ids(final_url)
+                if not shop_id or not item_id:
+                    shop_id, item_id = parse_shop_item_ids(url)
                 if shop_id and item_id and not captured_items and "verify" not in final_url:
-                    api_urls = [
-                        f"https://shopee.co.id/api/v4/pdp/get_pc?shop_id={shop_id}&item_id={item_id}",
-                        f"https://shopee.co.id/api/v4/item/get?shopid={shop_id}&itemid={item_id}",
-                    ]
-                    for api_url in api_urls:
-                        try:
-                            result = page.evaluate(
-                                """async (apiUrl) => {
-                                  const r = await fetch(apiUrl, { credentials: 'include' });
-                                  if (!r.ok) return null;
-                                  return await r.json();
-                                }""",
-                                api_url,
-                            )
-                            if isinstance(result, dict):
-                                item = _extract_item_from_payload(result)
-                                if item:
-                                    captured_items.append(item)
-                                    break
-                        except Exception:
-                            continue
+                    item = _in_page_fetch_item(page, shop_id, item_id)
+                    if item:
+                        captured_items.append(item)
 
-                if captured_items and headed and not cdp_url:
+                if captured_items and headed:
                     try:
                         STORAGE_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
                         context.storage_state(path=str(STORAGE_STATE_PATH))
                     except Exception:
                         pass
-        except Exception as exc:
-            browser_error = str(exc)
+        except Exception:
+            return None
 
         if captured_items:
-            best = max(
-                captured_items,
-                key=lambda it: len(it.get("models") or [])
-                + len(it.get("images") or [])
-                + (1 if it.get("title") else 0),
-            )
-            return _parse_shopee_item(best, final_url or url)
-
-        if crawler_product and crawler_product.name not in {"Unknown Product", "Shopee Indonesia"}:
-            return crawler_product
-
-        hint = (
-            "Untuk Shopee: 1) py -m scrape_engine.cli open-chrome  2) login  "
-            "3) buka URL produk MANUAL di Chrome itu  "
-            "4) py -m scrape_engine.cli scrape URL --use-open-chrome --active-tab"
-        )
-        extra = f" Browser error: {browser_error}" if browser_error else ""
-        raise RuntimeError(
-            "Shopee blocked automated access (verify/challenge). "
-            f"{hint}{extra} URL: {url}"
-        )
+            return _parse_shopee_item(_best_item(captured_items), final_url or url)
+        return None

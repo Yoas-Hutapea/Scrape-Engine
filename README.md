@@ -6,6 +6,7 @@ Product scrape engine for **Tokopedia**, **Shopee**, **Lazada**, **Blibli**, **A
 
 - Python 3.11+
 - Chromium via Playwright
+- Camoufox (Shopee stealth — Firefox + fingerprint)
 - PostgreSQL database `IdeaSearch`
 
 ## Install
@@ -16,6 +17,7 @@ py -3 -m venv .venv
 .\.venv\Scripts\activate
 pip install -e .
 playwright install chromium
+python -m camoufox fetch
 ```
 
 Copy `.env.example` → `.env` and set DB credentials.
@@ -49,9 +51,14 @@ py -m scrape_engine.cli scrape "https://www.tokopedia.com/..." --format both --o
 # Skip DB
 py -m scrape_engine.cli scrape "https://www.tokopedia.com/..." --no-db --format json
 
-# Shopee (recommended)
+# Shopee (Camoufox — recommended)
+py -m scrape_engine.cli setup-session
+# login + selesaikan captcha di jendela Firefox, tunggu sampai sesi stabil
+py -m scrape_engine.cli scrape "https://shopee.co.id/..."
+py -m scrape_engine.cli search-shopee "laptop"
+
+# Shopee fallback (Chrome debug, tab dibuka manual)
 py -m scrape_engine.cli open-chrome
-# login + buka URL produk MANUAL, lalu:
 py -m scrape_engine.cli scrape "https://shopee.co.id/..." --use-open-chrome --active-tab
 ```
 
@@ -74,6 +81,14 @@ POST http://127.0.0.1:8001/scrape
 
 Response includes `db_batch_id` and `db_inserted`.
 
+Shopee search (top cheapest products):
+
+```
+GET http://127.0.0.1:8001/shopee/search?q=laptop&limit=3
+```
+
+Session helpers: `GET /shopee/session`, `POST /shopee/session/setup`, `POST /shopee/session/warm`.
+
 ### IDISys Price Comparison
 
 IDISys (`/Procurement/PriceComparison`) uses Google Programmable Search (`cx`) to collect marketplace product links, then calls this `/scrape` endpoint and renders a comparison table. Keep this API running while using that page. Set `SCRAPE_ENGINE_URL=http://127.0.0.1:8001` in the IDISys `.env`.
@@ -88,5 +103,5 @@ Thumbnail uses **`product_image_1` only** (no multi-image / variation-image colu
 - Use reasonably (rate limits, marketplace Terms of Service).
 - **Tokopedia** usually returns full variants/prices/stock from public HTML.
 - **Lazada / Blibli / Amazon / Alibaba**: parsed from public HTML (Open Graph / JSON-LD / embedded page data), with Playwright fallback.
-- **Shopee**: use `--use-open-chrome --active-tab` after opening the product page manually.
+- **Shopee**: Camoufox persistent profile + human simulation + API intercept, with DOM fallback. Run `setup-session` once. Chrome `--use-open-chrome --active-tab` remains as fallback.
 - Supported URL hosts include `tokopedia.com`, `shopee.*`, `lazada.*`, `blibli.com`, `amazon.*`, `alibaba.com`, `1688.com`.

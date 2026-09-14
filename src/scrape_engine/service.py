@@ -42,6 +42,22 @@ class ScrapeService:
             Marketplace.ALIBABA: AlibabaScraper(),
         }
 
+    def search_shopee(
+        self,
+        keyword: str,
+        *,
+        limit: int = 3,
+        headed: bool | None = None,
+        timeout_ms: int = 60_000,
+    ) -> dict[str, Any]:
+        scraper = self._scrapers[Marketplace.SHOPEE]
+        return scraper.search(  # type: ignore[attr-defined]
+            keyword,
+            limit=limit,
+            headed=headed,
+            timeout_ms=timeout_ms,
+        )
+
     def scrape_url(
         self,
         url: str,

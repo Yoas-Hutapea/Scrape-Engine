@@ -137,6 +137,52 @@ def scrape(
         raise typer.Exit(code=2)
 
 
+@app.command("setup-session")
+def setup_session() -> None:
+    """Login Shopee sekali di Camoufox (profil persisten, anti-bot bypass)."""
+    from scrape_engine.scrapers.shopee_session import setup_session as _setup
+
+    typer.echo("Membuka Camoufox. Login Shopee, selesaikan captcha, jangan tutup jendelanya.")
+    result = _setup()
+    if result.get("success"):
+        typer.echo("Sesi Shopee siap. Lanjut scrape URL atau search-shopee.")
+        return
+    raise typer.Exit(result.get("error") or "Setup sesi Shopee gagal.")
+
+
+@app.command("warm-session")
+def warm_session() -> None:
+    """Refresh cookie / token Shopee di profil Camoufox yang sudah ada."""
+    from scrape_engine.scrapers.shopee_session import warm_session as _warm
+
+    result = _warm(keep_open=False)
+    if result.get("success"):
+        typer.echo("Session warming berhasil.")
+        return
+    raise typer.Exit(result.get("error") or "Warm sesi Shopee gagal.")
+
+
+@app.command("search-shopee")
+def search_shopee(
+    keyword: str = typer.Argument(..., help="Kata kunci produk Shopee"),
+    limit: int = typer.Option(3, "--limit", "-n", help="Jumlah produk termurah"),
+    timeout: int = typer.Option(60_000, "--timeout", help="Page timeout in ms"),
+) -> None:
+    """Cari produk Shopee (Camoufox) dan tampilkan yang termurah."""
+    service = ScrapeService()
+    result = service.search_shopee(keyword, limit=limit, timeout_ms=timeout)
+    items = result.get("items") or []
+    typer.echo(f"reason={result.get('reason')} count={len(items)}")
+    for i, item in enumerate(items, start=1):
+        typer.echo(f"{i}. {item.get('name')}")
+        typer.echo(f"   Harga: {item.get('price_str') or item.get('price')}")
+        typer.echo(f"   Link: {item.get('link')}")
+    if result.get("error"):
+        typer.echo(f"ERROR: {result['error']}", err=True)
+    if not items:
+        raise typer.Exit(code=2)
+
+
 @app.command("open-chrome")
 def open_chrome(
     port: int = typer.Option(9222, "--port", help="Remote debugging port"),
