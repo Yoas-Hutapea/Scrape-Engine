@@ -1,6 +1,6 @@
 # Scrape Engine
 
-Product scrape engine for **Tokopedia**, **Shopee**, **Lazada**, **Blibli**, **Amazon**, and **Alibaba**. Results are inserted into **PostgreSQL** (`IdeaSearch.scraped_products`) by default. Optional XLSX/JSON file export is still available.
+Product scrape engine for **Tokopedia**, **Shopee**, **Blibli**, **Amazon**, and **Alibaba**. Results are inserted into **PostgreSQL** (`IdeaSearch.scraped_products`) by default. Optional XLSX/JSON file export is still available.
 
 ## Requirements
 
@@ -45,7 +45,11 @@ DB_PASSWORD=...
 # Scrape → insert PostgreSQL only (default)
 py -m scrape_engine.cli scrape "https://www.tokopedia.com/..."
 
-# Tokopedia listing /find (BigSeller-style: collect PDPs then scrape each)
+# Keyword search across 4 marketplaces (top 10 each, BigSeller-style; Amazon excluded)
+py -m scrape_engine.cli search-all "Baterai Alkaline AA" --limit 10
+py -m scrape_engine.cli scrape --keyword "Baterai Alkaline AA" --listing-limit 10 --no-db
+
+# Tokopedia listing /find (collect PDPs then scrape each)
 py -m scrape_engine.cli scrape "https://www.tokopedia.com/find/baterai-alkaline-aa" --listing-limit 10
 
 # Also export files
@@ -74,9 +78,18 @@ py -m scrape_engine.cli serve --port 8001
 ```
 
 ```json
+POST http://127.0.0.1:8001/search
+{
+  "q": "Baterai Alkaline AA",
+  "limit": 10
+}
+```
+
+```json
 POST http://127.0.0.1:8001/scrape
 {
-  "urls": ["https://www.tokopedia.com/..."],
+  "keyword": "Baterai Alkaline AA",
+  "listing_limit": 10,
   "to_db": true,
   "format": "none"
 }
@@ -94,7 +107,7 @@ Session helpers: `GET /shopee/session`, `POST /shopee/session/setup`, `POST /sho
 
 ### IDISys Price Comparison
 
-IDISys (`/Procurement/PriceComparison`) uses Google Programmable Search (`cx`) to collect marketplace product links, then calls this `/scrape` endpoint and renders a comparison table. Keep this API running while using that page. Set `SCRAPE_ENGINE_URL=http://127.0.0.1:8001` in the IDISys `.env`.
+IDISys (`/Procurement/PriceComparison`) sends the keyword to this engine. The engine opens Shopee, Tokopedia, Blibli, and Alibaba search pages, collects the top N product URLs (default 10), then scrapes each PDP. Amazon is excluded from keyword search. Google CSE is only a fallback if this API is down. Keep this API running while using that page. Set `SCRAPE_ENGINE_URL=http://127.0.0.1:8001` and `SCRAPE_ENGINE_TIMEOUT=1800` in the IDISys `.env`.
 
 ## Table `scraped_products`
 
@@ -105,9 +118,9 @@ Thumbnail uses **`product_image_1` only** (no multi-image / variation-image colu
 
 - Use reasonably (rate limits, marketplace Terms of Service).
 - **Tokopedia**: Camoufox first (same stealth stack as Shopee), then HTTP fallback. A `/find/` or `/search` listing URL is expanded then each PDP is scraped.
-- **Lazada / Blibli / Amazon / Alibaba**: parsed from public HTML (Open Graph / JSON-LD / embedded page data), with Playwright fallback.
-- **Shopee**: Camoufox persistent profile + human simulation + API intercept, with DOM fallback. Run `setup-session` once. Chrome `--use-open-chrome --active-tab` remains as fallback.
-- Supported URL hosts include `tokopedia.com`, `shopee.*`, `lazada.*`, `blibli.com`, `amazon.*`, `alibaba.com`, `1688.com`.
+- **Shopee**: Camoufox persistent profile + human simulation + API intercept, with DOM fallback. Keyword search keeps listing order when expanding a search page. Run `setup-session` once.
+- **Blibli / Alibaba**: listing pages are opened in Camoufox and the top product hrefs are collected, then each PDP is parsed from public HTML (Open Graph / JSON-LD) with Camoufox/Playwright fallback. Alibaba USD/CNY prices are converted to IDR using a live FX rate (fallback `USD_IDR_RATE`). **Amazon is not included in keyword search.**
+- Supported URL hosts for keyword search: `tokopedia.com`, `shopee.*`, `blibli.com`, `alibaba.com` / `1688.com`.
 
 ## Ubuntu Server
 

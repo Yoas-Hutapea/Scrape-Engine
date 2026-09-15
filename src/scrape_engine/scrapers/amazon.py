@@ -4,7 +4,7 @@ import re
 
 from scrape_engine.models import Product, Variant
 from scrape_engine.scrapers.base import BaseScraper
-from scrape_engine.scrapers.browser import goto_resilient, launch_page
+from scrape_engine.scrapers.browser import fetch_rendered_html
 from scrape_engine.scrapers.common import (
     fetch_html,
     meta_content,
@@ -97,19 +97,14 @@ class AmazonScraper(BaseScraper):
         if base:
             return _enrich_amazon_html(html, base)
 
-        with launch_page(headed=headed, cdp_url=cdp_url, reuse_existing_page=active_tab, url_hint=url) as (
-            _p,
-            _b,
-            page,
-            _c,
-            owns,
-        ):
-            if not (active_tab and not owns):
-                goto_resilient(page, url, timeout_ms=timeout_ms)
-            page.wait_for_timeout(4000)
-            final_url = page.url
-            html = page.content()
-
+        final_url, html = fetch_rendered_html(
+            url,
+            headed=headed,
+            timeout_ms=timeout_ms,
+            wait_ms=4000,
+            cdp_url=cdp_url,
+            active_tab=active_tab,
+        )
         base = product_from_meta_and_ld(html, final_url or url, default_currency=default_currency)
         if base:
             return _enrich_amazon_html(html, base)

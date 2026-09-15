@@ -352,8 +352,17 @@ DOM_SEARCH_SCRIPT = """() => {
 }"""
 
 
-def map_search_items(items: list[Any], *, limit: int = 3) -> list[dict[str, Any]]:
-    """Map Shopee search_items payload to name/price/link rows (cheapest first)."""
+def map_search_items(
+    items: list[Any],
+    *,
+    limit: int = 3,
+    sort_by_price: bool = True,
+) -> list[dict[str, Any]]:
+    """Map Shopee search_items payload to name/price/link rows.
+
+    Default is cheapest-first (CLI ``search-shopee``). Listing expansion keeps
+    appearance order when ``sort_by_price=False``.
+    """
     products: list[dict[str, Any]] = []
     for item in items:
         if not isinstance(item, dict):
@@ -380,7 +389,8 @@ def map_search_items(items: list[Any], *, limit: int = 3) -> list[dict[str, Any]
                 "link": f"https://shopee.co.id/product/{shopid}/{itemid}",
             }
         )
-    products.sort(key=lambda row: row["price"])
+    if sort_by_price:
+        products.sort(key=lambda row: row["price"])
     return products[:limit]
 
 
@@ -592,8 +602,9 @@ class ShopeeScraper(BaseScraper):
         limit: int = 3,
         headed: bool | None = None,
         timeout_ms: int = 60_000,
+        sort_by_price: bool = True,
     ) -> dict[str, Any]:
-        """Search Shopee by keyword and return the cheapest matching products."""
+        """Search Shopee by keyword and return matching products."""
         from scrape_engine.scrapers.camoufox_manager import camoufox_manager, profile_exists
         from scrape_engine.scrapers.shopee_session import ensure_warm_session
 
@@ -632,7 +643,7 @@ class ShopeeScraper(BaseScraper):
                     page.wait_for_timeout(1000)
 
                 api_items = state.get("items") or []
-                mapped = map_search_items(api_items, limit=limit)
+                mapped = map_search_items(api_items, limit=limit, sort_by_price=sort_by_price)
                 if mapped:
                     return {"items": mapped, "reason": REASON_SUCCESS}
 
@@ -657,7 +668,8 @@ class ShopeeScraper(BaseScraper):
                                     "link": link,
                                 }
                             )
-                    cleaned.sort(key=lambda row: row["price"])
+                    if sort_by_price:
+                        cleaned.sort(key=lambda row: row["price"])
                     cleaned = cleaned[:limit]
                     if cleaned:
                         return {"items": cleaned, "reason": REASON_SUCCESS}

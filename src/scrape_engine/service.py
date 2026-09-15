@@ -19,9 +19,10 @@ from scrape_engine.models import Product, flatten_products
 from scrape_engine.scrapers.alibaba import AlibabaScraper
 from scrape_engine.scrapers.amazon import AmazonScraper
 from scrape_engine.scrapers.blibli import BlibliScraper
-from scrape_engine.scrapers.lazada import LazadaScraper
+from scrape_engine.scrapers.listing import collect_listing_urls
 from scrape_engine.scrapers.shopee import ShopeeScraper
 from scrape_engine.scrapers.tokopedia import TokopediaScraper
+from scrape_engine.search_urls import SEARCHABLE_MARKETPLACES, keyword_listing_url
 
 FormatName = Literal["json", "xlsx", "both", "none"]
 
@@ -42,7 +43,6 @@ class ScrapeService:
         self._scrapers = {
             Marketplace.TOKOPEDIA: TokopediaScraper(),
             Marketplace.SHOPEE: ShopeeScraper(),
-            Marketplace.LAZADA: LazadaScraper(),
             Marketplace.BLIBLI: BlibliScraper(),
             Marketplace.AMAZON: AmazonScraper(),
             Marketplace.ALIBABA: AlibabaScraper(),
@@ -55,6 +55,7 @@ class ScrapeService:
         limit: int = 3,
         headed: bool | None = None,
         timeout_ms: int = 60_000,
+        sort_by_price: bool = True,
     ) -> dict[str, Any]:
         scraper = self._scrapers[Marketplace.SHOPEE]
         return scraper.search(  # type: ignore[attr-defined]
@@ -62,6 +63,7 @@ class ScrapeService:
             limit=limit,
             headed=headed,
             timeout_ms=timeout_ms,
+            sort_by_price=sort_by_price,
         )
 
     def expand_listing(
@@ -86,7 +88,7 @@ class ScrapeService:
                 active_tab=active_tab,
             )
         if marketplace is Marketplace.SHOPEE:
-            from urllib.parse import parse_qs, urlparse
+            from urllib.parse import parse_qs, urlparse, unquote
 
             parsed = urlparse(url)
             query = parse_qs(parsed.query)
@@ -94,14 +96,156 @@ class ScrapeService:
             if not keyword:
                 parts = [s for s in (parsed.path or "").split("/") if s]
                 if len(parts) >= 2 and parts[0] == "search":
-                    keyword = parts[1]
-            if not keyword:
-                raise RuntimeError(f"Tidak ada kata kunci di URL listing Shopee: {url}")
-            result = self.search_shopee(keyword, limit=limit, timeout_ms=timeout_ms)
-            return [str(item.get("link") or "") for item in (result.get("items") or []) if item.get("link")]
-        raise RuntimeError(
-            "Halaman listing marketplace ini belum didukung (saat ini: Tokopedia /find|/search, Shopee /search)."
+                    keyword = unquote(parts[1])
+            urls: list[str] = []
+            if keyword:
+                result = self.search_shopee(
+                    keyword,
+                    limit=limit,
+                    headed=headed or None,
+                    timeout_ms=timeout_ms,
+                    sort_by_price=False,
+                )
+                urls = [
+                    str(item.get("link") or "")
+                    for item in (result.get("items") or [])
+                    if item.get("link")
+                ]
+            if len(urls) >= limit:
+                return urls[:limit]
+            extra = collect_listing_urls(
+                url,
+                limit=limit,
+                headed=headed,
+                timeout_ms=timeout_ms,
+            )
+            for item in extra:
+                if item not in urls:
+                    urls.append(item)
+                if len(urls) >= limit:
+                    break
+            if urls:
+                return urls[:limit]
+            raise RuntimeError(f"Tidak ada produk di halaman listing Shopee: {url}")
+        urls = collect_listing_urls(
+            url,
+            limit=limit,
+            headed=headed,
+            timeout_ms=timeout_ms,
         )
+        if not urls:
+            raise RuntimeError(f"Tidak ada produk di halaman listing {marketplace.value}: {url}")
+        return urls[:limit]
+
+    def search_marketplaces(
+        self,
+        keyword: str,
+        *,
+        limit: int = 10,
+        marketplaces: list[Marketplace] | None = None,
+        headed: bool = False,
+        timeout_ms: int = 90_000,
+    ) -> dict[str, Any]:
+        """Open each marketplace search page and collect the top product URLs."""
+        query = " ".join(keyword.strip().split())
+        if not query:
+            raise ValueError("Keyword kosong.")
+        limit = max(1, min(int(limit), 30))
+        targets = list(marketplaces or SEARCHABLE_MARKETPLACES)
+        targets = [mp for mp in targets if mp is not Marketplace.AMAZON]
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        listing_urls: list[dict[str, str]] = []
+
+        for marketplace in targets:
+            listing = keyword_listing_url(query, marketplace)
+            listing_urls.append({"marketplace": marketplace.value, "url": listing})
+            try:
+                urls = self.expand_listing(
+                    listing,
+                    limit=limit,
+                    headed=headed,
+                    timeout_ms=timeout_ms,
+                )
+                urls = [canonicalize_product_url(u) for u in urls if u]
+                urls = [u for u in urls if is_product_url(u)]
+                if not urls:
+                    raise RuntimeError("Tidak ada produk di halaman pencarian.")
+                for index, product_url in enumerate(urls[:limit], start=1):
+                    items.append(
+                        {
+                            "url": product_url,
+                            "title": f"{marketplace.value} #{index}",
+                            "snippet": listing,
+                            "marketplace": marketplace.value,
+                            "is_product": True,
+                            "is_listing": False,
+                            "listing_url": listing,
+                        }
+                    )
+            except Exception as exc:
+                errors.append(
+                    {
+                        "url": listing,
+                        "error": str(exc),
+                        "marketplace": marketplace.value,
+                    }
+                )
+
+        return {
+            "query": query,
+            "source": "marketplace_search",
+            "items": items,
+            "errors": errors,
+            "listing_urls": listing_urls,
+        }
+
+    def search_and_scrape(
+        self,
+        keyword: str,
+        *,
+        listing_limit: int = 10,
+        marketplaces: list[Marketplace] | None = None,
+        headed: bool = False,
+        timeout_ms: int = 90_000,
+        delay_sec: float = 1.0,
+        cdp_url: str | None = None,
+        active_tab: bool = False,
+        to_db: bool = True,
+        out_dir: str | Path = "output",
+        fmt: FormatName = "none",
+        basename: str | None = None,
+    ) -> ScrapeResult:
+        found = self.search_marketplaces(
+            keyword,
+            limit=listing_limit,
+            marketplaces=marketplaces,
+            headed=headed,
+            timeout_ms=timeout_ms,
+        )
+        urls = [str(item.get("url") or "") for item in found.get("items") or [] if item.get("url")]
+        if not urls:
+            result = ScrapeResult()
+            result.errors = found.get("errors") or [
+                {"url": keyword, "error": "Tidak ada produk dari marketplace untuk kata kunci ini."}
+            ]
+            return result
+
+        result = self.scrape_and_export(
+            urls,
+            out_dir=out_dir,
+            fmt=fmt,
+            headed=headed,
+            timeout_ms=timeout_ms,
+            delay_sec=delay_sec,
+            basename=basename,
+            cdp_url=cdp_url,
+            active_tab=active_tab,
+            to_db=to_db,
+            listing_limit=listing_limit,
+        )
+        result.errors = list(found.get("errors") or []) + list(result.errors)
+        return result
 
     def scrape_url(
         self,

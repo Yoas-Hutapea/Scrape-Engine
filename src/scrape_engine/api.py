@@ -6,8 +6,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
+from scrape_engine.detect import Marketplace
 from scrape_engine.service import ScrapeService
 
 app = FastAPI(title="Scrape Engine", version="0.1.0")
@@ -35,7 +36,11 @@ class ExportFormat(str, Enum):
 
 
 class ScrapeRequest(BaseModel):
-    urls: list[str] = Field(..., min_length=1, description="Product URLs")
+    urls: list[str] = Field(default_factory=list, description="Product or listing URLs")
+    keyword: str | None = Field(
+        default=None,
+        description="If set (and urls empty): search all marketplaces then scrape top N each",
+    )
     format: ExportFormat = ExportFormat.none
     to_db: bool = True
     headed: bool = False
@@ -54,8 +59,22 @@ class ScrapeRequest(BaseModel):
         default=10,
         ge=1,
         le=30,
-        description="Max product PDPs to scrape from a /find or /search listing URL",
+        description="Max product PDPs per marketplace listing / keyword search",
     )
+    marketplaces: list[str] | None = Field(
+        default=None,
+        description="Optional marketplace filter, e.g. tokopedia,shopee",
+    )
+
+    @model_validator(mode="after")
+    def require_urls_or_keyword(self) -> ScrapeRequest:
+        urls = [u for u in (self.urls or []) if str(u).strip()]
+        keyword = (self.keyword or "").strip()
+        if not urls and not keyword:
+            raise ValueError("Provide urls or keyword.")
+        self.urls = urls
+        self.keyword = keyword or None
+        return self
 
 
 class ScrapeResponse(BaseModel):
@@ -106,6 +125,39 @@ def health() -> dict[str, Any]:
     except Exception:
         shopee = {"ready": False}
     return {"status": "ok", "database": db_ok, "shopee_session": shopee}
+
+
+class MarketplaceSearchRequest(BaseModel):
+    q: str = Field(..., min_length=1, description="Product keyword")
+    limit: int = Field(default=10, ge=1, le=30)
+    timeout_ms: int = 90_000
+    headed: bool = False
+    marketplaces: list[str] | None = None
+
+
+class MarketplaceSearchResponse(BaseModel):
+    query: str
+    source: str
+    items: list[dict[str, Any]]
+    errors: list[dict[str, str]]
+    listing_urls: list[dict[str, str]]
+
+
+def _parse_marketplaces(names: list[str] | None) -> list[Marketplace] | None:
+    if not names:
+        return None
+    out: list[Marketplace] = []
+    seen: set[str] = set()
+    for raw in names:
+        key = str(raw or "").strip().lower()
+        if not key or key in seen:
+            continue
+        try:
+            out.append(Marketplace(key))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=f"Unknown marketplace: {raw}") from exc
+        seen.add(key)
+    return out or None
 
 
 class ShopeeSearchResponse(BaseModel):
@@ -160,6 +212,27 @@ def shopee_session_warm() -> dict[str, Any]:
     return result
 
 
+@app.post("/search", response_model=MarketplaceSearchResponse)
+def search_marketplaces(body: MarketplaceSearchRequest) -> Any:
+    query = body.q.strip()
+    if not query:
+        raise HTTPException(status_code=400, detail='Field "q" is required.')
+    result = _service.search_marketplaces(
+        query,
+        limit=body.limit,
+        marketplaces=_parse_marketplaces(body.marketplaces),
+        headed=body.headed,
+        timeout_ms=body.timeout_ms,
+    )
+    return MarketplaceSearchResponse(
+        query=str(result.get("query") or query),
+        source=str(result.get("source") or "marketplace_search"),
+        items=list(result.get("items") or []),
+        errors=list(result.get("errors") or []),
+        listing_urls=list(result.get("listing_urls") or []),
+    )
+
+
 @app.post("/scrape", response_model=ScrapeResponse)
 def scrape(body: ScrapeRequest) -> Any:
     if body.to_db:
@@ -170,18 +243,34 @@ def scrape(body: ScrapeRequest) -> Any:
         except Exception as exc:
             raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
 
-    result = _service.scrape_and_export(
-        body.urls,
-        out_dir=body.out_dir,
-        fmt=body.format.value,  # type: ignore[arg-type]
-        headed=body.headed,
-        timeout_ms=body.timeout_ms,
-        delay_sec=body.delay_sec,
-        cdp_url=body.cdp_url,
-        active_tab=body.active_tab,
-        to_db=body.to_db,
-        listing_limit=body.listing_limit,
-    )
+    marketplaces = _parse_marketplaces(body.marketplaces)
+    if body.keyword and not body.urls:
+        result = _service.search_and_scrape(
+            body.keyword,
+            listing_limit=body.listing_limit,
+            marketplaces=marketplaces,
+            headed=body.headed,
+            timeout_ms=body.timeout_ms,
+            delay_sec=body.delay_sec,
+            cdp_url=body.cdp_url,
+            active_tab=body.active_tab,
+            to_db=body.to_db,
+            out_dir=body.out_dir,
+            fmt=body.format.value,  # type: ignore[arg-type]
+        )
+    else:
+        result = _service.scrape_and_export(
+            body.urls,
+            out_dir=body.out_dir,
+            fmt=body.format.value,  # type: ignore[arg-type]
+            headed=body.headed,
+            timeout_ms=body.timeout_ms,
+            delay_sec=body.delay_sec,
+            cdp_url=body.cdp_url,
+            active_tab=body.active_tab,
+            to_db=body.to_db,
+            listing_limit=body.listing_limit,
+        )
 
     if body.format == ExportFormat.xlsx and result.xlsx_path and not result.errors:
         return FileResponse(
@@ -211,6 +300,7 @@ def root() -> JSONResponse:
             "name": "Scrape Engine",
             "endpoints": {
                 "health": "GET /health",
+                "search": "POST /search",
                 "scrape": "POST /scrape",
                 "shopee_search": "GET /shopee/search?q=",
                 "shopee_session": "GET /shopee/session",

@@ -8,7 +8,6 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 class Marketplace(str, Enum):
     TOKOPEDIA = "tokopedia"
     SHOPEE = "shopee"
-    LAZADA = "lazada"
     BLIBLI = "blibli"
     AMAZON = "amazon"
     ALIBABA = "alibaba"
@@ -41,6 +40,8 @@ TOKOPEDIA_NON_PRODUCT_ROOTS = frozenset(
         "att",
         "explore",
         "nearby",
+        "helios-client",
+        "client-log",
     }
 )
 
@@ -64,9 +65,6 @@ def detect_marketplace(url: str) -> Marketplace:
 
     if "shopee." in host or host.startswith("s.shopee") or "shopee" in host:
         return Marketplace.SHOPEE
-
-    if "lazada." in host or "lazada" in host:
-        return Marketplace.LAZADA
 
     if "blibli.com" in host or host.endswith("blibli.id") or "blibli" in host:
         return Marketplace.BLIBLI
@@ -93,8 +91,6 @@ def detect_marketplace(url: str) -> Marketplace:
         return Marketplace.TOKOPEDIA
     if "shopee" in path:
         return Marketplace.SHOPEE
-    if "lazada" in path:
-        return Marketplace.LAZADA
     if "blibli" in path:
         return Marketplace.BLIBLI
     if "amazon" in path or "/dp/" in path or "/gp/product/" in path:
@@ -103,7 +99,7 @@ def detect_marketplace(url: str) -> Marketplace:
         return Marketplace.ALIBABA
 
     raise UnsupportedMarketplaceError(
-        "Unsupported marketplace URL (supported: Tokopedia, Shopee, Lazada, Blibli, Amazon, Alibaba): "
+        "Unsupported marketplace URL (supported: Tokopedia, Shopee, Blibli, Amazon, Alibaba): "
         f"{url}"
     )
 
@@ -140,15 +136,14 @@ def is_product_url(url: str) -> bool:
             return False
         if segments[0] in TOKOPEDIA_NON_PRODUCT_ROOTS:
             return False
-        if segments[1] in {"media", "review", "reviews", "talk", "info"}:
+        if segments[1] in {"media", "review", "reviews", "talk", "info", "client-log"}:
+            return False
+        if "client-log" in path or segments[0].endswith("-client"):
             return False
         return True
 
     if marketplace is Marketplace.SHOPEE:
         return bool(re.search(r"-i\.\d+\.\d+", joined) or "/product/" in joined)
-
-    if marketplace is Marketplace.LAZADA:
-        return "/products/" in joined or bool(re.search(r"-i\d+-s\d+", joined)) or "/pdp-" in joined
 
     if marketplace is Marketplace.BLIBLI:
         return "/p/" in joined or "/is--" in joined
@@ -179,8 +174,6 @@ def is_listing_url(url: str) -> bool:
         return first in {"find", "search"}
     if marketplace is Marketplace.SHOPEE:
         return first == "search" or bool(query.get("keyword"))
-    if marketplace is Marketplace.LAZADA:
-        return first in {"catalog", "tag"} or bool(query.get("q"))
     if marketplace is Marketplace.BLIBLI:
         return first in {"cari", "search"} or bool(query.get("s"))
     if marketplace is Marketplace.AMAZON:

@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "scrape-engine"
 version = "0.1.0"
-description = "Product scrape engine for Tokopedia and Shopee (BigSeller-compatible export)"
+description = "Product scrape engine for Tokopedia, Shopee, Blibli, Amazon, and Alibaba"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [

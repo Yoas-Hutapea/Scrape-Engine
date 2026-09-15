@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from contextlib import contextmanager
 from typing import Iterator, Literal
 
@@ -159,3 +160,50 @@ def goto_resilient(page: Page, url: str, timeout_ms: int = 60_000) -> None:
             continue
     if last_err:
         raise last_err
+
+
+def fetch_rendered_html(
+    url: str,
+    *,
+    headed: bool = False,
+    timeout_ms: int = 60_000,
+    wait_ms: int = 3500,
+    cdp_url: str | None = None,
+    active_tab: bool = False,
+) -> tuple[str, str]:
+    """Load a URL in Chromium and return ``(final_url, html)``.
+
+    Camoufox keeps a Playwright asyncio loop on the FastAPI worker thread, so
+    ``sync_playwright()`` cannot run there. This helper always uses a fresh
+    thread that does not share that loop.
+    """
+
+    box: dict[str, object] = {}
+
+    def worker() -> None:
+        try:
+            with launch_page(
+                headed=headed,
+                cdp_url=cdp_url,
+                reuse_existing_page=active_tab,
+                url_hint=url,
+            ) as (_p, _b, page, _c, owns):
+                if not (active_tab and not owns):
+                    goto_resilient(page, url, timeout_ms=timeout_ms)
+                if wait_ms > 0:
+                    page.wait_for_timeout(wait_ms)
+                box["ok"] = (page.url or url, page.content() or "")
+        except Exception as exc:
+            box["err"] = exc
+
+    thread = threading.Thread(target=worker, name="playwright-html", daemon=True)
+    thread.start()
+    thread.join(timeout=max(45.0, (timeout_ms / 1000) + 45.0))
+    if thread.is_alive():
+        raise RuntimeError(f"Playwright fallback timed out for: {url}")
+    if "err" in box:
+        raise box["err"]  # type: ignore[misc]
+    result = box.get("ok")
+    if not isinstance(result, tuple) or len(result) != 2:
+        raise RuntimeError(f"Playwright fallback returned no HTML for: {url}")
+    return str(result[0] or url), str(result[1] or "")

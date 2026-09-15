@@ -5,7 +5,7 @@ from typing import Any
 
 from scrape_engine.models import Product, Variant
 from scrape_engine.scrapers.base import BaseScraper
-from scrape_engine.scrapers.browser import goto_resilient, launch_page
+from scrape_engine.scrapers.browser import fetch_rendered_html
 from scrape_engine.scrapers.common import (
     extract_next_data,
     fetch_html,
@@ -138,26 +138,22 @@ class BlibliScraper(BaseScraper):
         if base and base.name != "Unknown Product":
             return base
 
-        with launch_page(headed=headed, cdp_url=cdp_url, reuse_existing_page=active_tab, url_hint=url) as (
-            _p,
-            _b,
-            page,
-            _c,
-            owns,
-        ):
-            if not (active_tab and not owns):
-                goto_resilient(page, url, timeout_ms=timeout_ms)
-            page.wait_for_timeout(3500)
-            final_url = page.url
-            html = page.content()
-            next_data = extract_next_data(html)
-            base = product_from_meta_and_ld(html, final_url or url, default_currency="IDR")
-            if next_data:
-                try:
-                    return _product_from_blibli_next(next_data, final_url or url, base)
-                except Exception:
-                    pass
-            if base:
-                return base
+        final_url, html = fetch_rendered_html(
+            url,
+            headed=headed,
+            timeout_ms=timeout_ms,
+            wait_ms=3500,
+            cdp_url=cdp_url,
+            active_tab=active_tab,
+        )
+        next_data = extract_next_data(html)
+        base = product_from_meta_and_ld(html, final_url or url, default_currency="IDR")
+        if next_data:
+            try:
+                return _product_from_blibli_next(next_data, final_url or url, base)
+            except Exception:
+                pass
+        if base:
+            return base
 
         raise RuntimeError(f"Failed to extract Blibli product data from: {url}")

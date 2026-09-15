@@ -11,11 +11,11 @@ def test_detect_shopee():
     assert detect_marketplace("https://shopee.co.id/abc-i.123.456") == Marketplace.SHOPEE
 
 
-def test_detect_lazada():
-    assert (
+def test_lazada_is_unsupported():
+    with pytest.raises(ValueError):
         detect_marketplace("https://www.lazada.co.id/products/pdp-i123-s456.html")
-        == Marketplace.LAZADA
-    )
+    assert not is_product_url("https://www.lazada.co.id/products/pdp-i123-s456.html")
+    assert not is_listing_url("https://www.lazada.co.id/catalog/?q=baterai")
 
 
 def test_detect_blibli():
@@ -54,6 +54,10 @@ def test_is_product_url_filters_listing_pages():
     assert is_listing_url("https://www.tokopedia.com/find/baterai-alkaline-aa")
     assert is_listing_url("https://www.tokopedia.com/search?q=baterai")
     assert is_listing_url("https://shopee.co.id/search?keyword=router")
+    assert is_listing_url("https://www.blibli.com/cari/baterai-alkaline-aa?s=baterai")
+    assert is_listing_url("https://www.amazon.co.id/s?k=baterai+alkaline")
+    assert is_listing_url("https://www.alibaba.com/trade/search?SearchText=baterai")
+    assert not is_product_url("https://www.tokopedia.com/helios-client/client-log")
     assert not is_listing_url("https://www.tokopedia.com/shop/router-mikrotik")
 
 

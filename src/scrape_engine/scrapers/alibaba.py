@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from typing import Any
 
+from scrape_engine.fx import product_prices_to_idr
 from scrape_engine.models import Product, Variant
 from scrape_engine.scrapers.base import BaseScraper
-from scrape_engine.scrapers.browser import goto_resilient, launch_page
+from scrape_engine.scrapers.browser import fetch_rendered_html
 from scrape_engine.scrapers.common import (
     extract_js_object,
     fetch_html,
@@ -86,6 +87,11 @@ def _product_from_alibaba_payload(
     )
 
 
+def _finalize_alibaba_product(product: Product) -> Product:
+    """Alibaba/1688 quotes USD or CNY; convert to IDR for price comparison."""
+    return product_prices_to_idr(product)
+
+
 class AlibabaScraper(BaseScraper):
     def scrape(
         self,
@@ -124,27 +130,60 @@ class AlibabaScraper(BaseScraper):
                     payload, final_url or url, base, currency=default_currency
                 )
                 if product.name and product.name != "Unknown Product":
-                    return product
+                    return _finalize_alibaba_product(product)
             except Exception:
                 pass
 
         if base and base.name != "Unknown Product":
-            return base
+            return _finalize_alibaba_product(base)
 
-        with launch_page(headed=headed, cdp_url=cdp_url, reuse_existing_page=active_tab, url_hint=url) as (
-            _p,
-            _b,
-            page,
-            _c,
-            owns,
-        ):
-            if not (active_tab and not owns):
-                goto_resilient(page, url, timeout_ms=timeout_ms)
-            page.wait_for_timeout(4000)
-            final_url = page.url
-            html = page.content()
+        # Camoufox often bypasses Alibaba bot walls better than Chromium.
+        try:
+            from scrape_engine.scrapers.listing import open_listing_html
 
-        base = product_from_meta_and_ld(html, final_url or url, default_currency=default_currency)
-        if base:
-            return base
-        raise RuntimeError(f"Failed to extract Alibaba product data from: {url}")
+            final_url, html = open_listing_html(url, headed=headed or None, timeout_ms=timeout_ms)
+        except Exception:
+            final_url, html = url, ""
+
+        if html:
+            base = product_from_meta_and_ld(html, final_url or url, default_currency=default_currency)
+            payload = None
+            for marker in (
+                "window.__INIT_DATA=",
+                "window.__page_data=",
+                "window.detailData=",
+                "window.contextPath=",
+            ):
+                payload = extract_js_object(html, marker)
+                if payload:
+                    break
+            if payload:
+                try:
+                    product = _product_from_alibaba_payload(
+                        payload, final_url or url, base, currency=default_currency
+                    )
+                    if product.name and product.name != "Unknown Product":
+                        return _finalize_alibaba_product(product)
+                except Exception:
+                    pass
+            if base and base.name != "Unknown Product":
+                return _finalize_alibaba_product(base)
+
+        try:
+            final_url, html = fetch_rendered_html(
+                url,
+                headed=headed,
+                timeout_ms=timeout_ms,
+                wait_ms=4000,
+                cdp_url=cdp_url,
+                active_tab=active_tab,
+            )
+            base = product_from_meta_and_ld(html, final_url or url, default_currency=default_currency)
+            if base and base.name != "Unknown Product":
+                return _finalize_alibaba_product(base)
+        except Exception:
+            pass
+
+        raise RuntimeError(
+            "Alibaba memblokir ekstraksi produk (anti-bot). Coba lagi nanti atau tempel URL marketplace lain."
+        )

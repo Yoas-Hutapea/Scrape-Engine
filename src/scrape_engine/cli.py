@@ -12,7 +12,7 @@ from scrape_engine.service import ScrapeService
 app = typer.Typer(
     add_completion=False,
     no_args_is_help=True,
-    help="Scrape Engine CLI (Tokopedia, Shopee, Lazada, Blibli, Amazon, Alibaba)",
+    help="Scrape Engine CLI (Tokopedia, Shopee, Blibli, Amazon, Alibaba)",
 )
 
 
@@ -54,7 +54,16 @@ def init_db() -> None:
 
 @app.command("scrape")
 def scrape(
-    url_or_file: str = typer.Argument(..., help="Product URL, listing URL (/find|/search), or text file with one URL per line"),
+    url_or_file: str | None = typer.Argument(
+        None,
+        help="Product URL, listing URL, or text file with one URL per line",
+    ),
+    keyword: str | None = typer.Option(
+        None,
+        "--keyword",
+        "-k",
+        help="Search all marketplaces then scrape the top N products each",
+    ),
     format: str = typer.Option(
         "none",
         "--format",
@@ -90,7 +99,7 @@ def scrape(
     listing_limit: int = typer.Option(
         10,
         "--listing-limit",
-        help="Max products to scrape from a Tokopedia /find or /search listing URL",
+        help="Max products per marketplace listing / keyword search",
     ),
 ) -> None:
     """Scrape product URL(s), insert into PostgreSQL, optionally export XLSX/JSON."""
@@ -98,9 +107,9 @@ def scrape(
     if fmt not in {"json", "xlsx", "both", "none"}:
         raise typer.BadParameter("format must be none, json, xlsx, or both")
 
-    urls = _resolve_urls(url_or_file)
-    if not urls:
-        raise typer.Exit(code=1)
+    keyword = (keyword or "").strip() or None
+    if not keyword and not (url_or_file or "").strip():
+        raise typer.BadParameter("Provide a URL/file or --keyword")
 
     cdp_url = cdp
     if use_open_chrome and not cdp_url:
@@ -115,18 +124,35 @@ def scrape(
         _init()
 
     service = ScrapeService()
-    result = service.scrape_and_export(
-        urls,
-        out_dir=out,
-        fmt=fmt,  # type: ignore[arg-type]
-        headed=headed,
-        timeout_ms=timeout,
-        delay_sec=delay,
-        cdp_url=cdp_url,
-        active_tab=active_tab,
-        to_db=to_db,
-        listing_limit=listing_limit,
-    )
+    if keyword:
+        result = service.search_and_scrape(
+            keyword,
+            listing_limit=listing_limit,
+            headed=headed,
+            timeout_ms=timeout,
+            delay_sec=delay,
+            cdp_url=cdp_url,
+            active_tab=active_tab,
+            to_db=to_db,
+            out_dir=out,
+            fmt=fmt,  # type: ignore[arg-type]
+        )
+    else:
+        urls = _resolve_urls(url_or_file or "")
+        if not urls:
+            raise typer.Exit(code=1)
+        result = service.scrape_and_export(
+            urls,
+            out_dir=out,
+            fmt=fmt,  # type: ignore[arg-type]
+            headed=headed,
+            timeout_ms=timeout,
+            delay_sec=delay,
+            cdp_url=cdp_url,
+            active_tab=active_tab,
+            to_db=to_db,
+            listing_limit=listing_limit,
+        )
 
     typer.echo(f"Products scraped: {len(result.products)}")
     typer.echo(f"Rows: {len(result.rows)}")
@@ -185,6 +211,50 @@ def search_shopee(
         typer.echo(f"   Link: {item.get('link')}")
     if result.get("error"):
         typer.echo(f"ERROR: {result['error']}", err=True)
+    if not items:
+        raise typer.Exit(code=2)
+
+
+@app.command("search-all")
+def search_all(
+    keyword: str = typer.Argument(..., help="Kata kunci produk (semua marketplace)"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Jumlah produk teratas per marketplace"),
+    timeout: int = typer.Option(90_000, "--timeout", help="Page timeout in ms"),
+    scrape: bool = typer.Option(False, "--scrape", help="Lanjut scrape setiap PDP yang terkumpul"),
+    to_db: bool = typer.Option(True, "--to-db/--no-db", help="Insert rows into PostgreSQL (hanya dengan --scrape)"),
+    headed: bool = typer.Option(False, "--headed", help="Show a new browser window (debug)"),
+) -> None:
+    """Buka search Shopee/Tokopedia/Blibli/Alibaba, ambil 10 teratas."""
+    service = ScrapeService()
+    if scrape:
+        if to_db:
+            from scrape_engine.db import init_db as _init
+
+            _init()
+        result = service.search_and_scrape(
+            keyword,
+            listing_limit=limit,
+            headed=headed,
+            timeout_ms=timeout,
+            to_db=to_db,
+        )
+        typer.echo(f"Products scraped: {len(result.products)}")
+        typer.echo(f"Rows: {len(result.rows)}")
+        for err in result.errors:
+            typer.echo(f"ERROR {err.get('url')}: {err.get('error')}", err=True)
+        if result.errors and not result.rows:
+            raise typer.Exit(code=2)
+        return
+
+    found = service.search_marketplaces(keyword, limit=limit, timeout_ms=timeout, headed=headed)
+    items = found.get("items") or []
+    typer.echo(f"query={found.get('query')} count={len(items)}")
+    for listing in found.get("listing_urls") or []:
+        typer.echo(f"SEARCH {listing.get('marketplace')}: {listing.get('url')}")
+    for i, item in enumerate(items, start=1):
+        typer.echo(f"{i}. [{item.get('marketplace')}] {item.get('url')}")
+    for err in found.get("errors") or []:
+        typer.echo(f"ERROR {err.get('marketplace') or err.get('url')}: {err.get('error')}", err=True)
     if not items:
         raise typer.Exit(code=2)
 

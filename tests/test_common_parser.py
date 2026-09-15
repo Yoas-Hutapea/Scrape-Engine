@@ -9,15 +9,15 @@ def test_parse_money_idr_and_usd():
 
 def test_product_from_meta_and_ld_minimal():
     html = """
-    <meta property="og:title" content="Sample Cable | Lazada"/>
+    <meta property="og:title" content="Sample Cable | Blibli"/>
     <meta property="og:description" content="Fast charging cable"/>
     <meta property="og:image" content="https://img.example/a.jpg"/>
-    <meta property="og:url" content="https://www.lazada.co.id/products/x.html"/>
+    <meta property="og:url" content="https://www.blibli.com/p/sample-cable/is--ABC-1"/>
     <script type="application/ld+json">
     {"@type":"Product","name":"Sample Cable","offers":{"@type":"Offer","price":"99000","priceCurrency":"IDR"}}
     </script>
     """
-    product = product_from_meta_and_ld(html, "https://www.lazada.co.id/products/x.html")
+    product = product_from_meta_and_ld(html, "https://www.blibli.com/p/sample-cable/is--ABC-1")
     assert product is not None
     assert product.name == "Sample Cable"
     assert product.images[0].endswith("a.jpg")
