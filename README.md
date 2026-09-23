@@ -131,13 +131,23 @@ Camoufox runs on Linux. On a headless VPS it uses **Xvfb** (`headless="virtual"`
 
 ```bash
 sudo apt update
-sudo apt install -y xvfb fonts-liberation
+sudo apt install -y xvfb fonts-liberation curl
+
+# Microsoft ODBC Driver 18 for SQL Server (required by pyodbc)
+curl -sSL -O https://packages.microsoft.com/config/ubuntu/$(grep VERSION_ID /etc/os-release | cut -d '"' -f 2)/packages-microsoft-prod.deb
+sudo dpkg -i packages-microsoft-prod.deb && rm packages-microsoft-prod.deb
+sudo apt update
+sudo ACCEPT_EULA=Y apt install -y msodbcsql18 unixodbc-dev
+
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e .
-playwright install chromium
+playwright install --with-deps chromium
 python -m camoufox fetch
+python -m scrape_engine.cli init-db
 ```
+
+In `.env`, point `DB_HOST` at the SQL Server machine (not `127.0.0.1` unless SQL Server runs on the same box). That server must accept TCP connections on port 1433 from the Ubuntu host (SQL Server Configuration Manager → TCP/IP enabled, firewall open).
 
 Login Shopee still needs a screen (captcha). Either:
 
