@@ -12,6 +12,7 @@ from scrape_engine.db.schema import (
     OBSOLETE_IMAGE_COLUMNS,
     ROW_COLUMNS,
     SCHEMA_STATEMENTS,
+    SCRAPED_AT_OFFSET,
     row_to_db_values,
 )
 from scrape_engine.db.settings import get_db_settings
@@ -189,8 +190,7 @@ def list_products(
 ) -> dict[str, Any]:
     """List scraped products grouped per (product_source_link, scrape_batch_id).
 
-    Returns {total, filtered, items, marketplaces}. Dates are inclusive and compared
-    against scraped_at's own (stored) offset.
+    Returns {total, filtered, items, marketplaces}. Dates are inclusive, in GMT+7.
     """
     conditions: list[str] = []
     params: list[Any] = []
@@ -205,10 +205,10 @@ def list_products(
         conditions.append("marketplace = ?")
         params.append(marketplace.strip().lower())
     if start_date:
-        conditions.append("CAST(scraped_at AS DATE) >= ?")
+        conditions.append(f"CAST(SWITCHOFFSET(scraped_at, '{SCRAPED_AT_OFFSET}') AS DATE) >= ?")
         params.append(start_date)
     if end_date:
-        conditions.append("CAST(scraped_at AS DATE) <= ?")
+        conditions.append(f"CAST(SWITCHOFFSET(scraped_at, '{SCRAPED_AT_OFFSET}') AS DATE) <= ?")
         params.append(end_date)
 
     where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
