@@ -10,7 +10,8 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from scrape_engine.detect import Marketplace
-from scrape_engine.service import ScrapeService
+from scrape_engine.jobs import JobStore
+from scrape_engine.service import ScrapeResult, ScrapeService
 
 app = FastAPI(title="Scrape Engine", version="0.1.0")
 app.add_middleware(
@@ -27,6 +28,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 _service = ScrapeService()
+_jobs = JobStore()
 
 
 class ExportFormat(str, Enum):
@@ -283,19 +285,10 @@ def list_products(
     return ProductListResponse(**result)
 
 
-@app.post("/scrape", response_model=ScrapeResponse)
-def scrape(body: ScrapeRequest) -> Any:
-    if body.to_db:
-        try:
-            from scrape_engine.db import init_db
-
-            init_db()
-        except Exception as exc:
-            raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
-
+def _execute_scrape(body: ScrapeRequest) -> ScrapeResult:
     marketplaces = _parse_marketplaces(body.marketplaces)
     if body.keyword and not body.urls:
-        result = _service.search_and_scrape(
+        return _service.search_and_scrape(
             body.keyword,
             listing_limit=body.listing_limit,
             marketplaces=marketplaces,
@@ -309,20 +302,48 @@ def scrape(body: ScrapeRequest) -> Any:
             fmt=body.format.value,  # type: ignore[arg-type]
             budget_sec=body.budget_sec,
         )
-    else:
-        result = _service.scrape_and_export(
-            body.urls,
-            out_dir=body.out_dir,
-            fmt=body.format.value,  # type: ignore[arg-type]
-            headed=body.headed,
-            timeout_ms=body.timeout_ms,
-            delay_sec=body.delay_sec,
-            cdp_url=body.cdp_url,
-            active_tab=body.active_tab,
-            to_db=body.to_db,
-            listing_limit=body.listing_limit,
-            budget_sec=body.budget_sec,
-        )
+    return _service.scrape_and_export(
+        body.urls,
+        out_dir=body.out_dir,
+        fmt=body.format.value,  # type: ignore[arg-type]
+        headed=body.headed,
+        timeout_ms=body.timeout_ms,
+        delay_sec=body.delay_sec,
+        cdp_url=body.cdp_url,
+        active_tab=body.active_tab,
+        to_db=body.to_db,
+        listing_limit=body.listing_limit,
+        budget_sec=body.budget_sec,
+    )
+
+
+def _scrape_payload(result: ScrapeResult) -> dict[str, Any]:
+    return {
+        "products": len(result.products),
+        "rows": _service.rows_payload(result.rows),
+        "errors": result.errors,
+        "xlsx_path": str(result.xlsx_path) if result.xlsx_path else None,
+        "json_path": str(result.json_path) if result.json_path else None,
+        "db_batch_id": result.db_batch_id,
+        "db_inserted": result.db_inserted,
+    }
+
+
+def _ensure_db(body: ScrapeRequest) -> None:
+    if not body.to_db:
+        return
+    try:
+        from scrape_engine.db import init_db
+
+        init_db()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
+
+
+@app.post("/scrape", response_model=ScrapeResponse)
+def scrape(body: ScrapeRequest) -> Any:
+    _ensure_db(body)
+    result = _execute_scrape(body)
 
     if body.format == ExportFormat.xlsx and result.xlsx_path and not result.errors:
         return FileResponse(
@@ -334,15 +355,30 @@ def scrape(body: ScrapeRequest) -> Any:
     if not result.rows and result.errors:
         raise HTTPException(status_code=502, detail=result.errors)
 
-    return ScrapeResponse(
-        products=len(result.products),
-        rows=_service.rows_payload(result.rows),
-        errors=result.errors,
-        xlsx_path=str(result.xlsx_path) if result.xlsx_path else None,
-        json_path=str(result.json_path) if result.json_path else None,
-        db_batch_id=result.db_batch_id,
-        db_inserted=result.db_inserted,
-    )
+    return ScrapeResponse(**_scrape_payload(result))
+
+
+class ScrapeJobResponse(BaseModel):
+    job_id: str
+    status: Literal["running", "done", "error"]
+    error: str | None = None
+    result: dict[str, Any] | None = None
+
+
+@app.post("/scrape/jobs", response_model=ScrapeJobResponse)
+def start_scrape_job(body: ScrapeRequest) -> ScrapeJobResponse:
+    """Start a scrape and return immediately. Poll GET /scrape/jobs/{job_id}."""
+    _ensure_db(body)
+    job_id = _jobs.start(lambda: _scrape_payload(_execute_scrape(body)))
+    return ScrapeJobResponse(job_id=job_id, status="running")
+
+
+@app.get("/scrape/jobs/{job_id}", response_model=ScrapeJobResponse)
+def scrape_job(job_id: str) -> ScrapeJobResponse:
+    job = _jobs.get(job_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="Job tidak ditemukan.")
+    return ScrapeJobResponse(**job)
 
 
 @app.get("/")
@@ -354,6 +390,7 @@ def root() -> JSONResponse:
                 "health": "GET /health",
                 "search": "POST /search",
                 "scrape": "POST /scrape",
+                "scrape_job": "POST /scrape/jobs",
                 "products": "GET /products",
                 "shopee_search": "GET /shopee/search?q=",
                 "shopee_session": "GET /shopee/session",

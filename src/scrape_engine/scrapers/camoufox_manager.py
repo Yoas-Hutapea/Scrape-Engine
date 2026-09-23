@@ -118,9 +118,13 @@ class CamoufoxManager:
         self._lock = threading.RLock()
         self._cm: Any = None
         self._context: Any = None
+        self._owner: int | None = None
 
     def get_context(self, *, headed: bool | None = None) -> Any:
         with self._lock:
+            owner = threading.get_ident()
+            if self._context is not None and self._owner != owner:
+                self._shutdown_locked()
             if self._context is not None:
                 return self._context
 
@@ -158,6 +162,7 @@ class CamoufoxManager:
 
             self._cm = Camoufox(**launch_kwargs)
             self._context = self._cm.__enter__()
+            self._owner = owner
             return self._context
 
     @staticmethod
@@ -186,13 +191,17 @@ class CamoufoxManager:
 
     def close(self) -> None:
         with self._lock:
-            if self._cm is not None:
-                try:
-                    self._cm.__exit__(None, None, None)
-                except Exception:
-                    pass
-            self._cm = None
-            self._context = None
+            self._shutdown_locked()
+
+    def _shutdown_locked(self) -> None:
+        if self._cm is not None:
+            try:
+                self._cm.__exit__(None, None, None)
+            except Exception:
+                pass
+        self._cm = None
+        self._context = None
+        self._owner = None
 
     @property
     def is_open(self) -> bool:
