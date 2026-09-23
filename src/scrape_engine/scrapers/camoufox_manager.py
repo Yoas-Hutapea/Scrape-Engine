@@ -61,6 +61,49 @@ def profile_dir() -> Path:
     return (PROJECT_ROOT / "output" / "shopee-profile").resolve()
 
 
+def load_fingerprint_config(path: Path) -> dict[str, Any] | None:
+    """Read the saved Camoufox fingerprint config (``CAMOU_CONFIG_*``).
+
+    Older fingerprint.json files hold the full ``launch_options()`` output, which is
+    machine-specific (executable_path, headless, the whole host env). Only the
+    fingerprint config is portable, so that is all we take from them.
+    """
+    try:
+        saved = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    if not isinstance(saved, dict) or not saved:
+        return None
+    if isinstance(saved.get("config"), dict):
+        return saved["config"]
+    return _config_from_env(saved.get("env") or {})
+
+
+def _config_from_env(env: dict[str, Any]) -> dict[str, Any] | None:
+    keys = sorted(
+        (k for k in env if k.startswith("CAMOU_CONFIG_") and k.rsplit("_", 1)[1].isdigit()),
+        key=lambda k: int(k.rsplit("_", 1)[1]),
+    )
+    if not keys:
+        return None
+    try:
+        config = json.loads("".join(str(env[k]) for k in keys))
+    except Exception:
+        return None
+    return config if isinstance(config, dict) and config else None
+
+
+def fingerprint_os(config: dict[str, Any]) -> Literal["windows", "macos", "linux"] | None:
+    platform_name = str(config.get("navigator.platform") or "").lower()
+    if platform_name.startswith("win"):
+        return "windows"
+    if platform_name.startswith("mac"):
+        return "macos"
+    if platform_name.startswith("linux"):
+        return "linux"
+    return None
+
+
 def profile_exists() -> bool:
     path = profile_dir()
     if not path.is_dir():
@@ -101,28 +144,31 @@ class CamoufoxManager:
                 "locale": "id-ID",
                 "enable_cache": True,
             }
-            if fingerprint_path.is_file():
-                try:
-                    saved = json.loads(fingerprint_path.read_text(encoding="utf-8"))
-                    if isinstance(saved, dict) and saved:
-                        launch_kwargs["from_options"] = saved
-                except Exception:
-                    pass
+            # Reuse the fingerprint the Shopee session was created with; the executable,
+            # headless mode and display are always resolved fresh for this machine.
+            config = load_fingerprint_config(fingerprint_path) if fingerprint_path.is_file() else None
+            if not config:
+                config = self._new_fingerprint_config(target_os)
+                if config:
+                    fingerprint_path.write_text(json.dumps({"config": config}), encoding="utf-8")
+            if config:
+                launch_kwargs["config"] = config
+                launch_kwargs["os"] = fingerprint_os(config) or target_os
+                launch_kwargs["i_know_what_im_doing"] = True
 
             self._cm = Camoufox(**launch_kwargs)
             self._context = self._cm.__enter__()
-            if not fingerprint_path.is_file():
-                self._try_save_fingerprint(fingerprint_path, dest)
             return self._context
 
-    def _try_save_fingerprint(self, path: Path, dest: Path) -> None:
+    @staticmethod
+    def _new_fingerprint_config(target_os: str) -> dict[str, Any] | None:
         try:
             from camoufox.utils import launch_options
 
-            opts = launch_options(user_data_dir=str(dest), os=camoufox_os(), locale="id-ID")
-            path.write_text(json.dumps(opts, default=str), encoding="utf-8")
+            opts = launch_options(os=target_os, locale="id-ID")
+            return _config_from_env(opts.get("env") or {})
         except Exception:
-            return
+            return None
 
     @contextmanager
     def open_page(self, *, headed: bool | None = None) -> Iterator[tuple[Any, Any]]:
