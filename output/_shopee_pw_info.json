@@ -1,0 +1,16 @@
+{
+  "info": {
+    "title": "Shopee Indonesia | Situs Belanja Online Terlengkap & Terpercaya",
+    "h1": "",
+    "og": "Shopee Indonesia | Situs Belanja Online Terlengkap & Terpercaya",
+    "textLen": 250,
+    "hasVerify": true
+  },
+  "captured": [
+    {
+      "url": "https://shopee.co.id/api/v4/pdp/get_pc?item_id=41410763816&shop_id=110101298&tz_offset_in_minutes=420&detail_level=0&incoming_pdp_page_source=0&incoming_pdp_page_scenario=0",
+      "status": 200
+    }
+  ],
+  "html_len": 195489
+}

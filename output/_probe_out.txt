@@ -1,0 +1,19 @@
+﻿basic ['pdpBasicInfo13851290419']
+{"alias": "isku-mata-bor-hole-saw-lubang-tembok-beton-hollow-core-saw-beton-pelubang-beton-tembok-pipa-drill-bit-perkakas-alat-pertukangan-30-40-50-60-65-80-90-mm-set-30mm-88c7f", "createdAt": "2024-09-15T23:47:31+07:00", "isQA": false, "productID": "13851290419", "shopID": "13888128", "shopName": "ISKU Tools Official Store", "minOrder": 1, "maxOrder": 601, "weight": 0.15, "weightUnit": "KILOGRAM", "condition": "NEW", "status": "ACTIVE", "url": "https://www.tokopedia.com/isku-tools-official-store/isku-mata-bor-hole-saw-lubang-tembok-beton-hollow-core-saw-beton-pelubang-beton-tembok-pipa-drill-bit-perkakas-alat-pertukangan-30-40-50-60-65-80-90-mm-set-30mm-88c7f", "needPrescription": false, "catalogID": "0", "isLeasing": false, "isBlacklisted": false, "isTokoNow": false, "defaultMediaURL": "https://p19-images-sign-sg.tokopedia-static.net/tos-alisg-i-aphluv4xwc-sg/941f256c0bbb45c58a51dfc49f726c8a~tplv-aphluv4xwc-resize-jpeg:700:0.jpeg?lk3s=0ccea506&x-expires=1789042577&x-signature=q1VcyoTbCIIS8bQwp46hKEovlQ0%3D&x-signature-webp=ItmcGkoei%2F8yghV%2BoDFe81Qcf7A%3D", "menu": {"type": "id", "generated": false, "id": "pdpMenu33448899", "typename": "pdpMenu"}, "blacklistMessage": {"type": "id", "generated": true, "id": "$pdpBasicInfo13851290419.blacklistMessage", "typename": "pdpBlacklistMessage"}, "category": {"type": "id", "generated": false, "id": "pdpCategory4240", "typename": "pdpCategory"}, "txStats": {"type": "id", "generated": true, "id": "$pdpBasicInfo13851290419.txStats", "t
+desc len 0
+weight 0.15
+children 16
+{"productID": "13851290416", "price": 53900, "priceFmt": "Rp53.900", "slashPriceFmt": "Rp99.000", "discPercentage": "46%", "optionID": {"type": "json", "json": [10]}, "optionName": {"type": "json", "json": ["160mm adaptor"]}, "productName": "ISKU Mata Bor Beton Hole Saw Tembok 30mm - 90mm Set Adaptor SDS Plus Mesin Rotary Hammer Baja Tungsten YG8 Pembuka Lubang Pipa AC Paralon Alat Tukang Bangunan Proyek Tembus Dinding Keras Anti Macet Heavy Duty - 160mm adaptor", "productURL": "https://www.tokopedia.com/isku-tools-official-store/isku-mata-bor-hole-saw-lubang-tembok-beton-hollow-core-saw-beton-pelubang-beton-tembok-pipa-drill-bit-perkakas-alat-pertukangan-30-40-50-60-65-80-90-mm-set-160mm-adaptor-70bf6", "picture": {"url": "https://images.tokopedia.net/img/cache/700/aphluv/1997/1/1/83772bd
+options typename count 16
+{"picture": {"url": "https://images.tokopedia.net/img/cache/700/aphluv/1997/1/1/aee150790074483684637088631fd692~.jpeg.webp", "url100": "https://images.tokopedia.net/img/cache/150/aphluv/1997/1/1/aee150790074483684637088631fd692~.jpeg", "__typename": "pdpProductVariantPicture"}, "productVariantOptionID": "2", "variantUnitValueID": "0", "value": "30mm", "hex": "", "stock": "601", "__typename": "pdpProductVariantOption"}
+pdpBasicInfo 1
+pdpContentProductDetail 4
+pdpContentSnapshotVariant 1
+pdpDataProductVariant 1
+pdpProductVariantCampaign 16
+pdpProductVariantChildren 16
+pdpProductVariantOption 16
+pdpProductVariantOutput 1
+pdpProductVariantPicture 32
+pdpProductVariantStock 16
+content {"title": "Kondisi", "subtitle": "Baru", "applink": "", "showAtFront": true, "isAnnotation": false, "__typename": "pdpContentProductDetail"}

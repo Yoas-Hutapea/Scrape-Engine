@@ -1,0 +1,69 @@
+{
+  "productID": "13851290416",
+  "price": 53900,
+  "priceFmt": "Rp53.900",
+  "slashPriceFmt": "Rp99.000",
+  "discPercentage": "46%",
+  "optionID": {
+    "type": "json",
+    "json": [
+      10
+    ]
+  },
+  "optionName": {
+    "type": "json",
+    "json": [
+      "160mm adaptor"
+    ]
+  },
+  "productName": "ISKU Mata Bor Beton Hole Saw Tembok 30mm - 90mm Set Adaptor SDS Plus Mesin Rotary Hammer Baja Tungsten YG8 Pembuka Lubang Pipa AC Paralon Alat Tukang Bangunan Proyek Tembus Dinding Keras Anti Macet Heavy Duty - 160mm adaptor",
+  "productURL": "https://www.tokopedia.com/isku-tools-official-store/isku-mata-bor-hole-saw-lubang-tembok-beton-hollow-core-saw-beton-pelubang-beton-tembok-pipa-drill-bit-perkakas-alat-pertukangan-30-40-50-60-65-80-90-mm-set-160mm-adaptor-70bf6",
+  "picture": {
+    "url": "https://images.tokopedia.net/img/cache/700/aphluv/1997/1/1/83772bd4e0024366831b29960b44e0f5~.jpeg.webp",
+    "url100": "https://images.tokopedia.net/img/cache/150/aphluv/1997/1/1/83772bd4e0024366831b29960b44e0f5~.jpeg",
+    "__typename": "pdpProductVariantPicture"
+  },
+  "stock": {
+    "stock": "688",
+    "isBuyable": true,
+    "stockWordingHTML": "",
+    "minimumOrder": "1",
+    "maximumOrder": "688",
+    "__typename": "pdpProductVariantStock"
+  },
+  "isCOD": true,
+  "isWishlist": false,
+  "campaignInfo": {
+    "campaignID": "7680188532863059713",
+    "campaignType": "66",
+    "campaignTypeName": "Kejar Diskon",
+    "campaignIdentifier": 1,
+    "background": "#D72C2C",
+    "discountPercentage": 46,
+    "originalPrice": 99000,
+    "discountPrice": 53900,
+    "stock": 688,
+    "stockSoldPercentage": 92,
+    "startDate": "2026-09-01 00:00:00",
+    "endDate": "2026-09-30 23:59:59",
+    "endDateUnix": "1790787599",
+    "appLinks": "",
+    "isAppsOnly": false,
+    "isActive": true,
+    "hideGimmick": false,
+    "isCheckImei": false,
+    "minOrder": 1,
+    "showStockBar": true,
+    "__typename": "pdpProductVariantCampaign"
+  },
+  "thematicCampaign": {
+    "additionalInfo": "Spesial Diskon",
+    "background": "#16754E,#47DB6D",
+    "campaignName": "<span style='color:#FFFFFF'><b>Spesial Diskon</b></span>",
+    "icon": "https://p16-images-comn-sg.tokopedia-static.net/tos-alisg-i-zr7vqa5nfb-sg/img/yLOfon/2026/6/24/b85b1795-6814-4f42-940f-78fbabac843f.png~tplv-zr7vqa5nfb-resize-jpeg:700:0.png",
+    "__typename": "pdpContentSnapshotThematicCampaign"
+  },
+  "ttsPID": "1730048484644062530",
+  "ttsSKUID": "1730048484644259138",
+  "__typename": "pdpProductVariantChildren"
+}

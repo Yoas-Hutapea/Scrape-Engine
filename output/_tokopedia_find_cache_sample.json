@@ -1,0 +1,17 @@
+[
+  {
+    "searchable": 0,
+    "placeholder": "",
+    "__typename": "DAFilterSearch"
+  },
+  {
+    "searchable": 1,
+    "placeholder": "Cari Lokasi",
+    "__typename": "DAFilterSearch"
+  },
+  {
+    "searchable": 0,
+    "placeholder": "",
+    "__typename": "DAFilterSearch"
+  }
+]

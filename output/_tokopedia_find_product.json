@@ -1,0 +1,146 @@
+{
+  "id": 103173851017,
+  "id_str_auto_": "103173851017",
+  "name": "Baterai Alkaline ABC AA Kecil Batere ABC Batere AA isi 2",
+  "url": "https://www.tokopedia.com/cenglistore/baterai-alkaline-abc-aa-kecil-batere-abc-batere-aa-isi-2-1734900531264718327?extParam=ivf%3Dfalse%26keyword%3Dbaterai+alkaline+aa%26search_id%3D2026091407560589F0FD5C927D46354751%26src%3Dsearch",
+  "applink": "tokopedia://product/103173851017?extParam=ivf%3Dfalse%26keyword%3Dbaterai+alkaline+aa%26search_id%3D2026091407560589F0FD5C927D46354751%26src%3Dsearch",
+  "mediaURL": {
+    "image": "https://p19-images-sign-sg.tokopedia-static.net/tos-alisg-i-aphluv4xwc-sg/5b0b537c136040359511d0a8badda362~tplv-aphluv4xwc-white-pad-v1:200:200.jpeg?lk3s=97278606&x-expires=1789376166&x-signature=eh8bPeJQnyCbHVZfm%2B5fDwd2sn8%3D&x-signature-webp=8yyJmymjUATGkxCDc%2BeE7K%2Fn7rw%3D",
+    "image300": "https://p16-images-sign-sg.tokopedia-static.net/tos-alisg-i-aphluv4xwc-sg/5b0b537c136040359511d0a8badda362~tplv-aphluv4xwc-white-pad-v1:300:300.jpeg?lk3s=97278606&x-expires=1789376166&x-signature=DKQQVEOOvswwLChVmqLF7wxx0Ic%3D&x-signature-webp=4VLqZHledRo7ni5Sms78qynEXM4%3D",
+    "videoCustom": "",
+    "__typename": "SearchProductV5MediaURL"
+  },
+  "shop": {
+    "id": 194460,
+    "id_str_auto_": "194460",
+    "name": "Cengli Store",
+    "url": "https://www.tokopedia.com/cenglistore",
+    "city": "Surabaya",
+    "tier": 2,
+    "__typename": "SearchProductV5Shop"
+  },
+  "badge": {
+    "id": 4,
+    "id_str_auto_": "4",
+    "title": "Surabaya",
+    "url": "https://p16-images-comn-sg.tokopedia-static.net/tos-alisg-i-zr7vqa5nfb-sg/img/official_store/badge_os.png~tplv-zr7vqa5nfb-image.image",
+    "__typename": "SearchProductV5Badge"
+  },
+  "price": {
+    "text": "Rp42.500",
+    "number": 42500,
+    "range": "",
+    "original": "",
+    "discountPercentage": 0,
+    "__typename": "SearchProductV5Price"
+  },
+  "freeShipping": {
+    "url": "",
+    "__typename": "SearchProductV5FreeShipping"
+  },
+  "labelGroups": [
+    {
+      "position": "ri_product_credibility",
+      "title": "4 terjual",
+      "type": "",
+      "url": "",
+      "styles": [],
+      "__typename": "SearchProductV5LabelGroups"
+    },
+    {
+      "position": "ri_product_offer",
+      "title": "Hemat s.d  3% Pakai Bonus",
+      "type": "",
+      "url": "",
+      "styles": [
+        {
+          "key": "text-color",
+          "value": "#FF7F17",
+          "__typename": "SearchProductV5LabelGroupsStyle"
+        }
+      ],
+      "__typename": "SearchProductV5LabelGroups"
+    },
+    {
+      "position": "final_price",
+      "title": "Rp42.500",
+      "type": "",
+      "url": "",
+      "styles": [
+        {
+          "key": "text-color",
+          "value": "#080808",
+          "__typename": "SearchProductV5LabelGroupsStyle"
+        }
+      ],
+      "__typename": "SearchProductV5LabelGroups"
+    },
+    {
+      "position": "ri_product_offer_v2",
+      "title": "Hemat s.d  3% Pakai Bonus",
+      "type": "",
+      "url": "",
+      "styles": [
+        {
+          "key": "outline-color",
+          "value": "#FFD9A8",
+          "__typename": "SearchProductV5LabelGroupsStyle"
+        },
+        {
+          "key": "text-color",
+          "value": "#FF7F17",
+          "__typename": "SearchProductV5LabelGroupsStyle"
+        }
+      ],
+      "__typename": "SearchProductV5LabelGroups"
+    },
+    {
+      "position": "ri_product_offer_v2",
+      "title": "Bisa COD",
+      "type": "",
+      "url": "",
+      "styles": [
+        {
+          "key": "outline-color",
+          "value": "#DFE2EA",
+          "__typename": "SearchProductV5LabelGroupsStyle"
+        },
+        {
+          "key": "text-color",
+          "value": "#656C7B",
+          "__typename": "SearchProductV5LabelGroupsStyle"
+        }
+      ],
+      "__typename": "SearchProductV5LabelGroups"
+    }
+  ],
+  "category": {
+    "id": 984,
+    "id_str_auto_": "984",
+    "name": "Rumah Tangga",
+    "breadcrumb": "rumah-tangga/kebutuhan-rumah/baterai",
+    "gaKey": "rumah-tangga/kebutuhan-rumah/baterai",
+    "__typename": "SearchProductV5Category"
+  },
+  "rating": "5.0",
+  "wishlist": false,
+  "ads": {
+    "id": "",
+    "productClickURL": "",
+    "productViewURL": "",
+    "productWishlistURL": "",
+    "tag": 0,
+    "__typename": "SearchProductV5Ads"
+  },
+  "meta": {
+    "countReview": 0,
+    "parentID": 0,
+    "parentID_str_auto_": "0",
+    "warehouseID": 262364,
+    "warehouseID_str_auto_": "262364",
+    "isImageBlurred": false,
+    "isPortrait": false,
+    "__typename": "SearchProductV5ProductMeta"
+  },
+  "__typename": "searchProductV5Product"
+}
