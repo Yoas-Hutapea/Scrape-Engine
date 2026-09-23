@@ -41,7 +41,7 @@ def _find_chrome_exe() -> str | None:
 
 @app.command("init-db")
 def init_db() -> None:
-    """Create scraped_products table in PostgreSQL (from .env)."""
+    """Create scraped_products table in SQL Server (from .env)."""
     from scrape_engine.db import get_db_settings, init_db as _init, ping
 
     settings = get_db_settings()
@@ -71,7 +71,7 @@ def scrape(
         help="Optional file export: none | json | xlsx | both (default: none — DB only)",
     ),
     out: Path = typer.Option(Path("output"), "--out", "-o", help="Output directory (if exporting files)"),
-    to_db: bool = typer.Option(True, "--to-db/--no-db", help="Insert rows into PostgreSQL"),
+    to_db: bool = typer.Option(True, "--to-db/--no-db", help="Insert rows into SQL Server"),
     headed: bool = typer.Option(False, "--headed", help="Show a new browser window (debug)"),
     cdp: str | None = typer.Option(
         None,
@@ -102,7 +102,7 @@ def scrape(
         help="Max products per marketplace listing / keyword search",
     ),
 ) -> None:
-    """Scrape product URL(s), insert into PostgreSQL, optionally export XLSX/JSON."""
+    """Scrape product URL(s), insert into SQL Server, optionally export XLSX/JSON."""
     fmt = format.lower().strip()
     if fmt not in {"json", "xlsx", "both", "none"}:
         raise typer.BadParameter("format must be none, json, xlsx, or both")
@@ -221,7 +221,7 @@ def search_all(
     limit: int = typer.Option(10, "--limit", "-n", help="Jumlah produk teratas per marketplace"),
     timeout: int = typer.Option(90_000, "--timeout", help="Page timeout in ms"),
     scrape: bool = typer.Option(False, "--scrape", help="Lanjut scrape setiap PDP yang terkumpul"),
-    to_db: bool = typer.Option(True, "--to-db/--no-db", help="Insert rows into PostgreSQL (hanya dengan --scrape)"),
+    to_db: bool = typer.Option(True, "--to-db/--no-db", help="Insert rows into SQL Server (hanya dengan --scrape)"),
     headed: bool = typer.Option(False, "--headed", help="Show a new browser window (debug)"),
 ) -> None:
     """Buka search Shopee/Tokopedia/Blibli/Alibaba, ambil 10 teratas."""

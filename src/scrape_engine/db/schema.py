@@ -49,41 +49,62 @@ OBSOLETE_IMAGE_COLUMNS: list[str] = [
     "variation_image_9",
 ]
 
-CREATE_TABLE_SQL = """
-CREATE TABLE IF NOT EXISTS scraped_products (
-    id                  BIGSERIAL PRIMARY KEY,
-    scrape_batch_id     VARCHAR(64) NOT NULL,
-    marketplace         VARCHAR(32),
-    product_name        TEXT,
-    long_description    TEXT,
-    short_description   TEXT,
-    product_source_link TEXT,
-    variation_name_1    TEXT,
-    variation_option_1  TEXT,
-    variation_name_2    TEXT,
-    variation_option_2  TEXT,
-    variation_name_3    TEXT,
-    variation_option_3  TEXT,
-    price               DOUBLE PRECISION,
-    discount            DOUBLE PRECISION,
-    currency            VARCHAR(16),
-    stock               DOUBLE PRECISION,
-    sku                 TEXT,
-    package_weight      TEXT,
-    package_length      TEXT,
-    package_width       TEXT,
-    package_height      TEXT,
-    product_image_1     TEXT,
-    scraped_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_scraped_products_batch
-    ON scraped_products (scrape_batch_id);
-CREATE INDEX IF NOT EXISTS idx_scraped_products_source
-    ON scraped_products (product_source_link);
-CREATE INDEX IF NOT EXISTS idx_scraped_products_sku
-    ON scraped_products (sku);
-"""
+# SQL Server (T-SQL). Each entry runs as its own batch; all are idempotent.
+# product_source_link is NVARCHAR(MAX) (too long to index), so it is indexed and grouped
+# via the persisted SHA-256 column source_link_hash.
+SCHEMA_STATEMENTS: list[str] = [
+    """
+IF OBJECT_ID(N'dbo.scraped_products', N'U') IS NULL
+CREATE TABLE dbo.scraped_products (
+    id                  BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    scrape_batch_id     NVARCHAR(64) NOT NULL,
+    marketplace         NVARCHAR(32) NULL,
+    product_name        NVARCHAR(MAX) NULL,
+    long_description    NVARCHAR(MAX) NULL,
+    short_description   NVARCHAR(MAX) NULL,
+    product_source_link NVARCHAR(MAX) NULL,
+    variation_name_1    NVARCHAR(MAX) NULL,
+    variation_option_1  NVARCHAR(MAX) NULL,
+    variation_name_2    NVARCHAR(MAX) NULL,
+    variation_option_2  NVARCHAR(MAX) NULL,
+    variation_name_3    NVARCHAR(MAX) NULL,
+    variation_option_3  NVARCHAR(MAX) NULL,
+    price               FLOAT NULL,
+    discount            FLOAT NULL,
+    currency            NVARCHAR(16) NULL,
+    stock               FLOAT NULL,
+    sku                 NVARCHAR(450) NULL,
+    package_weight      NVARCHAR(MAX) NULL,
+    package_length      NVARCHAR(MAX) NULL,
+    package_width       NVARCHAR(MAX) NULL,
+    package_height      NVARCHAR(MAX) NULL,
+    product_image_1     NVARCHAR(MAX) NULL,
+    scraped_at          DATETIMEOFFSET(6) NOT NULL
+        CONSTRAINT df_scraped_products_scraped_at DEFAULT SYSDATETIMEOFFSET(),
+    source_link_hash    AS CAST(HASHBYTES('SHA2_256', product_source_link) AS BINARY(32)) PERSISTED
+)
+""",
+    """
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_scraped_products_batch'
+               AND object_id = OBJECT_ID(N'dbo.scraped_products'))
+CREATE INDEX idx_scraped_products_batch ON dbo.scraped_products (scrape_batch_id)
+""",
+    """
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_scraped_products_source'
+               AND object_id = OBJECT_ID(N'dbo.scraped_products'))
+CREATE INDEX idx_scraped_products_source ON dbo.scraped_products (source_link_hash)
+""",
+    """
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_scraped_products_sku'
+               AND object_id = OBJECT_ID(N'dbo.scraped_products'))
+CREATE INDEX idx_scraped_products_sku ON dbo.scraped_products (sku)
+""",
+    """
+IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = N'idx_scraped_products_scraped_at'
+               AND object_id = OBJECT_ID(N'dbo.scraped_products'))
+CREATE INDEX idx_scraped_products_scraped_at ON dbo.scraped_products (scraped_at)
+""",
+]
 
 
 def row_to_db_values(row: dict[str, Any]) -> dict[str, Any]:

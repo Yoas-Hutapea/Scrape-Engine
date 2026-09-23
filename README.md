@@ -1,13 +1,13 @@
 # Scrape Engine
 
-Product scrape engine for **Tokopedia**, **Shopee**, **Blibli**, **Amazon**, and **Alibaba**. Results are inserted into **PostgreSQL** (`IdeaSearch.scraped_products`) by default. Optional XLSX/JSON file export is still available.
+Product scrape engine for **Tokopedia**, **Shopee**, **Blibli**, **Amazon**, and **Alibaba**. Results are inserted into **SQL Server** (`IdeaSearch.dbo.scraped_products`) by default. Optional XLSX/JSON file export is still available.
 
 ## Requirements
 
 - Python 3.11+
 - Chromium via Playwright
 - Camoufox (Shopee stealth — Firefox + fingerprint)
-- PostgreSQL database `IdeaSearch`
+- SQL Server database `IdeaSearch` + Microsoft ODBC Driver 18 (or 17) for SQL Server
 
 ## Install
 
@@ -32,17 +32,20 @@ py -m scrape_engine.cli init-db
 Credentials are read from `.env`:
 
 ```
+DB_CONNECTION=sqlsrv
 DB_HOST=127.0.0.1
-DB_PORT=5432
+DB_PORT=1433
 DB_DATABASE=IdeaSearch
-DB_USERNAME=postgres
+DB_USERNAME=...
 DB_PASSWORD=...
+# optional: DB_URL="sqlsrv:Server=127.0.0.1,1433;Database=IdeaSearch;Encrypt=no;TrustServerCertificate=yes;"
+# optional: DB_ODBC_DRIVER=ODBC Driver 17 for SQL Server
 ```
 
 ## CLI
 
 ```bash
-# Scrape → insert PostgreSQL only (default)
+# Scrape → insert SQL Server only (default)
 py -m scrape_engine.cli scrape "https://www.tokopedia.com/..."
 
 # Keyword search across 4 marketplaces (top 10 each, BigSeller-style; Amazon excluded)

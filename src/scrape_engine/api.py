@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+from datetime import date
 from enum import Enum
-from typing import Any
+from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
@@ -233,6 +234,46 @@ def search_marketplaces(body: MarketplaceSearchRequest) -> Any:
     )
 
 
+class ProductListResponse(BaseModel):
+    total: int
+    filtered: int
+    items: list[dict[str, Any]]
+    marketplaces: list[str]
+
+
+@app.get("/products", response_model=ProductListResponse)
+def list_products(
+    search: str | None = None,
+    marketplace: str | None = None,
+    start_date: date | None = Query(default=None, description="Inclusive, filters scraped_at"),
+    end_date: date | None = Query(default=None, description="Inclusive, filters scraped_at"),
+    sort: Literal[
+        "scraped_at", "product_name", "marketplace", "price_min", "price_max", "variant_count", "stock"
+    ] = "scraped_at",
+    dir: Literal["asc", "desc"] = "desc",
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=25, ge=1, le=200),
+) -> Any:
+    if start_date and end_date and start_date > end_date:
+        raise HTTPException(status_code=400, detail="start_date must be on or before end_date.")
+    try:
+        from scrape_engine.db import list_products as db_list_products
+
+        result = db_list_products(
+            search=search,
+            marketplace=marketplace,
+            start_date=start_date,
+            end_date=end_date,
+            sort=sort,
+            direction=dir,
+            offset=offset,
+            limit=limit,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Database unavailable: {exc}") from exc
+    return ProductListResponse(**result)
+
+
 @app.post("/scrape", response_model=ScrapeResponse)
 def scrape(body: ScrapeRequest) -> Any:
     if body.to_db:
@@ -302,6 +343,7 @@ def root() -> JSONResponse:
                 "health": "GET /health",
                 "search": "POST /search",
                 "scrape": "POST /scrape",
+                "products": "GET /products",
                 "shopee_search": "GET /shopee/search?q=",
                 "shopee_session": "GET /shopee/session",
             },
