@@ -1,6 +1,7 @@
 import time
 
 from scrape_engine.detect import Marketplace, is_listing_url, is_product_url
+from scrape_engine.models import Product
 from scrape_engine.service import ScrapeService
 from scrape_engine.scrapers.listing import listing_product_urls_from_html
 from scrape_engine.search_urls import all_listing_urls, keyword_listing_url, keyword_slug
@@ -97,6 +98,29 @@ def test_search_marketplaces_returns_partial_results_inside_budget(monkeypatch):
     late = {error["marketplace"] for error in result["errors"]}
     assert late == {"tokopedia", "blibli", "alibaba"}
     assert all("Batas waktu" in error["error"] for error in result["errors"])
+
+
+def test_scrape_many_returns_partial_results_inside_budget(monkeypatch):
+    service = ScrapeService()
+    urls = [
+        "https://www.tokopedia.com/shop-a/baterai-aa-1",
+        "https://www.tokopedia.com/shop-b/baterai-aa-2",
+        "https://www.tokopedia.com/shop-c/baterai-aa-3",
+    ]
+
+    def scrape_url(url, **_kwargs):
+        time.sleep(0.35)
+        return Product(name="Baterai", source_link=url, price=1000)
+
+    monkeypatch.setattr(service, "scrape_url", scrape_url)
+    started = time.monotonic()
+    result = service.scrape_many(urls, timeout_ms=5_000, delay_sec=0, budget_sec=0.5)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.2
+    assert len(result.products) == 2
+    assert len(result.errors) == 1
+    assert "Batas waktu compare" in result.errors[0]["error"]
 
 
 def test_is_product_url_still_filters_search_pages():

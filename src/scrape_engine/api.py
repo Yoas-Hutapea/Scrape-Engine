@@ -62,6 +62,12 @@ class ScrapeRequest(BaseModel):
         le=30,
         description="Max product PDPs per marketplace listing / keyword search",
     )
+    budget_sec: float | None = Field(
+        default=None,
+        ge=8,
+        le=1800,
+        description="Wall-clock cap so Shopping List compare returns before the gateway 504s",
+    )
     marketplaces: list[str] | None = Field(
         default=None,
         description="Optional marketplace filter, e.g. tokopedia,shopee",
@@ -301,6 +307,7 @@ def scrape(body: ScrapeRequest) -> Any:
             to_db=body.to_db,
             out_dir=body.out_dir,
             fmt=body.format.value,  # type: ignore[arg-type]
+            budget_sec=body.budget_sec,
         )
     else:
         result = _service.scrape_and_export(
@@ -314,6 +321,7 @@ def scrape(body: ScrapeRequest) -> Any:
             active_tab=body.active_tab,
             to_db=body.to_db,
             listing_limit=body.listing_limit,
+            budget_sec=body.budget_sec,
         )
 
     if body.format == ExportFormat.xlsx and result.xlsx_path and not result.errors:

@@ -306,13 +306,22 @@ class ScrapeService:
         out_dir: str | Path = "output",
         fmt: FormatName = "none",
         basename: str | None = None,
+        budget_sec: float | None = None,
     ) -> ScrapeResult:
+        search_budget = budget_sec
+        scrape_budget = budget_sec
+        search_timeout = timeout_ms
+        if budget_sec is not None:
+            search_budget = min(18.0, max(8.0, float(budget_sec) * 0.45))
+            scrape_budget = max(8.0, float(budget_sec) - search_budget)
+            search_timeout = min(timeout_ms, int(search_budget * 1000))
         found = self.search_marketplaces(
             keyword,
             limit=listing_limit,
             marketplaces=marketplaces,
             headed=headed,
-            timeout_ms=timeout_ms,
+            timeout_ms=search_timeout,
+            budget_sec=search_budget,
         )
         urls = [str(item.get("url") or "") for item in found.get("items") or [] if item.get("url")]
         if not urls:
@@ -334,6 +343,7 @@ class ScrapeService:
             active_tab=active_tab,
             to_db=to_db,
             listing_limit=listing_limit,
+            budget_sec=scrape_budget,
         )
         result.errors = list(found.get("errors") or []) + list(result.errors)
         return result
@@ -367,8 +377,22 @@ class ScrapeService:
         cdp_url: str | None = None,
         active_tab: bool = False,
         listing_limit: int = 10,
+        budget_sec: float | None = None,
     ) -> ScrapeResult:
         result = ScrapeResult()
+        started = time.monotonic()
+
+        def remaining() -> float | None:
+            if budget_sec is None:
+                return None
+            return float(budget_sec) - (time.monotonic() - started)
+
+        def budget_error(url: str) -> dict[str, str]:
+            return {
+                "url": url,
+                "error": "Batas waktu compare tercapai. URL ini belum di-scrape.",
+            }
+
         expanded: list[str] = []
         for url in urls:
             url = url.strip()
@@ -379,11 +403,18 @@ class ScrapeService:
                 if is_product_url(url):
                     expanded.append(url)
                 elif is_listing_url(url):
+                    left = remaining()
+                    if left is not None and left < 8:
+                        result.errors.append(budget_error(url))
+                        continue
+                    expand_timeout = timeout_ms
+                    if left is not None:
+                        expand_timeout = min(timeout_ms, max(8_000, int(left * 1000)))
                     kids = self.expand_listing(
                         url,
                         limit=listing_limit,
                         headed=headed,
-                        timeout_ms=timeout_ms,
+                        timeout_ms=expand_timeout,
                         cdp_url=cdp_url,
                         active_tab=active_tab,
                     )
@@ -408,18 +439,26 @@ class ScrapeService:
             unique.append(url)
 
         for i, url in enumerate(unique):
+            left = remaining()
+            if left is not None and left <= 0:
+                result.errors.append(budget_error(url))
+                continue
+            page_timeout = timeout_ms
+            if left is not None:
+                page_timeout = min(timeout_ms, max(1_000, int(left * 1000)))
             try:
                 product = self.scrape_url(
                     url,
                     headed=headed,
-                    timeout_ms=timeout_ms,
+                    timeout_ms=page_timeout,
                     cdp_url=cdp_url,
                     active_tab=active_tab,
                 )
                 result.products.append(product)
             except Exception as exc:
                 result.errors.append({"url": url, "error": str(exc)})
-            if i < len(unique) - 1 and delay_sec > 0:
+            left = remaining()
+            if i < len(unique) - 1 and delay_sec > 0 and (left is None or left > delay_sec):
                 time.sleep(delay_sec)
 
         result.rows = flatten_products(result.products)
@@ -439,6 +478,7 @@ class ScrapeService:
         active_tab: bool = False,
         to_db: bool = True,
         listing_limit: int = 10,
+        budget_sec: float | None = None,
     ) -> ScrapeResult:
         result = self.scrape_many(
             urls,
@@ -448,6 +488,7 @@ class ScrapeService:
             cdp_url=cdp_url,
             active_tab=active_tab,
             listing_limit=listing_limit,
+            budget_sec=budget_sec,
         )
         stamp = basename or datetime.now().strftime("scraped_product_%Y%m%d%H%M%S%f")[:-3]
 
