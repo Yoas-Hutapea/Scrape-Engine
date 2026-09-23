@@ -134,6 +134,8 @@ class MarketplaceSearchRequest(BaseModel):
     timeout_ms: int = 90_000
     headed: bool = False
     marketplaces: list[str] | None = None
+    # Wall-clock cap so the website gateway does not return 504 while browsers load.
+    budget_sec: float = Field(default=32, ge=8, le=120)
 
 
 class MarketplaceSearchResponse(BaseModel):
@@ -224,6 +226,7 @@ def search_marketplaces(body: MarketplaceSearchRequest) -> Any:
         marketplaces=_parse_marketplaces(body.marketplaces),
         headed=body.headed,
         timeout_ms=body.timeout_ms,
+        budget_sec=body.budget_sec,
     )
     return MarketplaceSearchResponse(
         query=str(result.get("query") or query),

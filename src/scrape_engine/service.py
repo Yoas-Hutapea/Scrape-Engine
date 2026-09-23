@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from concurrent.futures import ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -75,6 +76,8 @@ class ScrapeService:
         timeout_ms: int = 60_000,
         cdp_url: str | None = None,
         active_tab: bool = False,
+        isolated: bool = False,
+        fill: bool = True,
     ) -> list[str]:
         marketplace = detect_marketplace(url)
         limit = max(1, min(int(limit), 30))
@@ -86,6 +89,7 @@ class ScrapeService:
                 timeout_ms=timeout_ms,
                 cdp_url=cdp_url,
                 active_tab=active_tab,
+                isolated=isolated,
             )
         if marketplace is Marketplace.SHOPEE:
             from urllib.parse import parse_qs, urlparse, unquote
@@ -111,13 +115,14 @@ class ScrapeService:
                     for item in (result.get("items") or [])
                     if item.get("link")
                 ]
-            if len(urls) >= limit:
+            if len(urls) >= limit or (urls and not fill):
                 return urls[:limit]
             extra = collect_listing_urls(
                 url,
                 limit=limit,
                 headed=headed,
                 timeout_ms=timeout_ms,
+                isolated=isolated,
             )
             for item in extra:
                 if item not in urls:
@@ -132,10 +137,55 @@ class ScrapeService:
             limit=limit,
             headed=headed,
             timeout_ms=timeout_ms,
+            isolated=isolated,
         )
         if not urls:
             raise RuntimeError(f"Tidak ada produk di halaman listing {marketplace.value}: {url}")
         return urls[:limit]
+
+    def _collect_marketplace_items(
+        self,
+        query: str,
+        marketplace: Marketplace,
+        *,
+        limit: int,
+        headed: bool,
+        timeout_ms: int,
+        isolated: bool,
+    ) -> tuple[list[dict[str, Any]], dict[str, str] | None]:
+        listing = keyword_listing_url(query, marketplace)
+        try:
+            urls = self.expand_listing(
+                listing,
+                limit=limit,
+                headed=headed,
+                timeout_ms=timeout_ms,
+                isolated=isolated,
+                fill=False,
+            )
+            urls = [canonicalize_product_url(u) for u in urls if u]
+            urls = [u for u in urls if is_product_url(u)]
+            if not urls:
+                raise RuntimeError("Tidak ada produk di halaman pencarian.")
+            items = [
+                {
+                    "url": product_url,
+                    "title": f"{marketplace.value} #{index}",
+                    "snippet": listing,
+                    "marketplace": marketplace.value,
+                    "is_product": True,
+                    "is_listing": False,
+                    "listing_url": listing,
+                }
+                for index, product_url in enumerate(urls[:limit], start=1)
+            ]
+            return items, None
+        except Exception as exc:
+            return [], {
+                "url": listing,
+                "error": str(exc),
+                "marketplace": marketplace.value,
+            }
 
     def search_marketplaces(
         self,
@@ -145,52 +195,93 @@ class ScrapeService:
         marketplaces: list[Marketplace] | None = None,
         headed: bool = False,
         timeout_ms: int = 90_000,
+        budget_sec: float | None = None,
     ) -> dict[str, Any]:
-        """Open each marketplace search page and collect the top product URLs."""
+        """Open each marketplace search page and collect the top product URLs.
+
+        When ``budget_sec`` is set, marketplaces run together and the call returns
+        with whatever finished. The Shopping List page sits behind a gateway that
+        answers 504 if this request stays open too long.
+        """
         query = " ".join(keyword.strip().split())
         if not query:
             raise ValueError("Keyword kosong.")
         limit = max(1, min(int(limit), 30))
         targets = list(marketplaces or SEARCHABLE_MARKETPLACES)
         targets = [mp for mp in targets if mp is not Marketplace.AMAZON]
-        items: list[dict[str, Any]] = []
-        errors: list[dict[str, str]] = []
-        listing_urls: list[dict[str, str]] = []
+        listing_urls = [
+            {"marketplace": marketplace.value, "url": keyword_listing_url(query, marketplace)}
+            for marketplace in targets
+        ]
+        per_site_ms = max(8_000, int(timeout_ms))
+        if budget_sec is not None:
+            per_site_ms = min(per_site_ms, max(8_000, int(float(budget_sec) * 1000)))
 
-        for marketplace in targets:
-            listing = keyword_listing_url(query, marketplace)
-            listing_urls.append({"marketplace": marketplace.value, "url": listing})
-            try:
-                urls = self.expand_listing(
-                    listing,
+        found: dict[Marketplace, tuple[list[dict[str, Any]], dict[str, str] | None]] = {}
+        others = [mp for mp in targets if mp is not Marketplace.SHOPEE]
+        pool: ThreadPoolExecutor | None = None
+        futures = {}
+        started = time.monotonic()
+        try:
+            if others:
+                pool = ThreadPoolExecutor(max_workers=len(others), thread_name_prefix="mp-search")
+                futures = {
+                    pool.submit(
+                        self._collect_marketplace_items,
+                        query,
+                        marketplace,
+                        limit=limit,
+                        headed=headed,
+                        timeout_ms=per_site_ms,
+                        isolated=True,
+                    ): marketplace
+                    for marketplace in others
+                }
+            if Marketplace.SHOPEE in targets:
+                found[Marketplace.SHOPEE] = self._collect_marketplace_items(
+                    query,
+                    Marketplace.SHOPEE,
                     limit=limit,
                     headed=headed,
-                    timeout_ms=timeout_ms,
+                    timeout_ms=per_site_ms,
+                    isolated=False,
                 )
-                urls = [canonicalize_product_url(u) for u in urls if u]
-                urls = [u for u in urls if is_product_url(u)]
-                if not urls:
-                    raise RuntimeError("Tidak ada produk di halaman pencarian.")
-                for index, product_url in enumerate(urls[:limit], start=1):
-                    items.append(
-                        {
-                            "url": product_url,
-                            "title": f"{marketplace.value} #{index}",
-                            "snippet": listing,
+            if futures:
+                if budget_sec is None:
+                    done, pending = wait(futures)
+                else:
+                    remaining = float(budget_sec) - (time.monotonic() - started)
+                    done, pending = wait(futures, timeout=max(0.0, remaining))
+                for future in done:
+                    marketplace = futures[future]
+                    try:
+                        found[marketplace] = future.result()
+                    except Exception as exc:
+                        listing = keyword_listing_url(query, marketplace)
+                        found[marketplace] = ([], {
+                            "url": listing,
+                            "error": str(exc),
                             "marketplace": marketplace.value,
-                            "is_product": True,
-                            "is_listing": False,
-                            "listing_url": listing,
-                        }
-                    )
-            except Exception as exc:
-                errors.append(
-                    {
+                        })
+                for future in pending:
+                    marketplace = futures[future]
+                    listing = keyword_listing_url(query, marketplace)
+                    found[marketplace] = ([], {
                         "url": listing,
-                        "error": str(exc),
+                        "error": "Batas waktu pencarian tercapai sebelum halaman marketplace selesai dimuat.",
                         "marketplace": marketplace.value,
-                    }
-                )
+                    })
+        finally:
+            if pool is not None:
+                pool.shutdown(wait=budget_sec is None, cancel_futures=True)
+
+        items: list[dict[str, Any]] = []
+        errors: list[dict[str, str]] = []
+        for marketplace in targets:
+            rows, error = found.get(marketplace, ([], None))
+            items.extend(rows)
+            if error:
+                errors.append(error)
 
         return {
             "query": query,

@@ -627,12 +627,14 @@ class ShopeeScraper(BaseScraper):
             with camoufox_manager.open_page(headed=headed) as (page, _context):
                 _attach_search_interceptor(page, state)
                 search_url = f"https://shopee.co.id/search?keyword={keyword}"
+                started = time.monotonic()
                 page.goto(search_url, wait_until="domcontentloaded", timeout=timeout_ms)
                 simulate_human_activity(page, rounds=1)
                 human_delay(2000, 4000, page)
 
-                deadline = time.time() + min(30, timeout_ms / 1000)
-                while time.time() < deadline:
+                remain = timeout_ms / 1000 - (time.monotonic() - started)
+                deadline = time.monotonic() + max(0.0, min(12.0, remain))
+                while time.monotonic() < deadline:
                     if state.get("items") or state.get("reason") == REASON_EMPTY:
                         break
                     try:

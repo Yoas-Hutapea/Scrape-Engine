@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from html import unescape
 from typing import Any
 from urllib.parse import urlparse
@@ -470,11 +471,14 @@ def _cache_ready(cache: dict[str, Any] | None, wait_js: str) -> bool:
 
 
 def _navigate_tokopedia_page(page: Any, url: str, timeout_ms: int, wait_js: str) -> tuple[dict[str, Any] | None, str, str]:
-    nav_timeout = max(timeout_ms, 90_000)
+    budget_ms = max(8_000, int(timeout_ms))
+    deadline = time.monotonic() + budget_ms / 1000
     last: tuple[dict[str, Any] | None, str, str] = (None, "", url)
-    page.goto(url, wait_until="domcontentloaded", timeout=nav_timeout)
+    page.goto(url, wait_until="domcontentloaded", timeout=budget_ms)
     try:
-        page.wait_for_timeout(2000)
+        settle_ms = min(2000, max(0, int((deadline - time.monotonic()) * 1000)))
+        if settle_ms:
+            page.wait_for_timeout(settle_ms)
         last = _read_page_cache(page)
         if _cache_ready(last[0], wait_js):
             return last
@@ -482,13 +486,12 @@ def _navigate_tokopedia_page(page: Any, url: str, timeout_ms: int, wait_js: str)
         last = _read_page_cache(page)
         if _cache_ready(last[0], wait_js):
             return last
-        try:
-            page.wait_for_function(
-                wait_js,
-                timeout=min(max(timeout_ms - 8000, 12000), 40000),
-            )
-        except Exception:
-            pass
+        remain_ms = int((deadline - time.monotonic()) * 1000)
+        if remain_ms > 500:
+            try:
+                page.wait_for_function(wait_js, timeout=remain_ms)
+            except Exception:
+                pass
         last = _read_page_cache(page)
     except Exception as exc:
         log.warning("Tokopedia Camoufox navigation interrupted: %s", exc)
@@ -501,14 +504,16 @@ def _open_tokopedia_camoufox(
     headed: bool | None,
     timeout_ms: int,
     wait_js: str,
+    isolated: bool = False,
 ) -> tuple[dict[str, Any] | None, str, str]:
     from scrape_engine.scrapers.camoufox_manager import camoufox_manager, camoufox_os, shopee_headless
 
-    try:
-        with camoufox_manager.open_page(headed=headed) as (page, _context):
-            return _navigate_tokopedia_page(page, url, timeout_ms, wait_js)
-    except Exception as exc:
-        log.warning("Persistent Camoufox unavailable for Tokopedia (%s); using ephemeral browser.", exc)
+    if not isolated:
+        try:
+            with camoufox_manager.open_page(headed=headed) as (page, _context):
+                return _navigate_tokopedia_page(page, url, timeout_ms, wait_js)
+        except Exception as exc:
+            log.warning("Persistent Camoufox unavailable for Tokopedia (%s); using ephemeral browser.", exc)
 
     from camoufox.sync_api import Camoufox
 
@@ -552,6 +557,7 @@ class TokopediaScraper(BaseScraper):
         timeout_ms: int = 60_000,
         cdp_url: str | None = None,
         active_tab: bool = False,
+        isolated: bool = False,
     ) -> list[str]:
         url = canonicalize_product_url(url)
         if not is_listing_url(url):
@@ -567,6 +573,7 @@ class TokopediaScraper(BaseScraper):
                     headed=headed or None,
                     timeout_ms=timeout_ms,
                     wait_js=LISTING_CACHE_READY,
+                    isolated=isolated,
                 )
             except Exception:
                 html = ""

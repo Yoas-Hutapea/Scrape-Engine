@@ -98,15 +98,17 @@ def open_listing_html(
     *,
     headed: bool | None,
     timeout_ms: int,
+    isolated: bool = False,
 ) -> tuple[str, str]:
     """Open a listing page in Camoufox and return ``(final_url, html)``."""
     from scrape_engine.scrapers.camoufox_manager import camoufox_manager, camoufox_os, shopee_headless
 
-    try:
-        with camoufox_manager.open_page(headed=headed) as (page, _context):
-            return _run_listing_page(page, url, timeout_ms)
-    except Exception as exc:
-        log.warning("Persistent Camoufox unavailable for listing (%s); using ephemeral browser.", exc)
+    if not isolated:
+        try:
+            with camoufox_manager.open_page(headed=headed) as (page, _context):
+                return _run_listing_page(page, url, timeout_ms)
+        except Exception as exc:
+            log.warning("Persistent Camoufox unavailable for listing (%s); using ephemeral browser.", exc)
 
     from camoufox.sync_api import Camoufox
 
@@ -132,13 +134,19 @@ def collect_listing_urls(
     limit: int = 10,
     headed: bool = False,
     timeout_ms: int = 90_000,
+    isolated: bool = False,
 ) -> list[str]:
     """Collect top product URLs from any supported marketplace listing page."""
     limit = max(1, min(int(limit), 30))
     html = ""
     final = url
     try:
-        final, html = open_listing_html(url, headed=headed or None, timeout_ms=timeout_ms)
+        final, html = open_listing_html(
+            url,
+            headed=headed or None,
+            timeout_ms=timeout_ms,
+            isolated=isolated,
+        )
     except Exception as exc:
         log.warning("Camoufox listing navigation failed for %s: %s", url, exc)
 

@@ -1,4 +1,7 @@
+import time
+
 from scrape_engine.detect import Marketplace, is_listing_url, is_product_url
+from scrape_engine.service import ScrapeService
 from scrape_engine.scrapers.listing import listing_product_urls_from_html
 from scrape_engine.search_urls import all_listing_urls, keyword_listing_url, keyword_slug
 from scrape_engine.scrapers.shopee import map_search_items
@@ -72,6 +75,28 @@ def test_map_search_items_can_keep_api_order():
     ]
     mapped = map_search_items(items, limit=2, sort_by_price=False)
     assert [row["name"] for row in mapped] == ["Mahal", "Murah"]
+
+
+def test_search_marketplaces_returns_partial_results_inside_budget(monkeypatch):
+    service = ScrapeService()
+
+    def expand_listing(url, **_kwargs):
+        if "shopee.co.id" in url:
+            time.sleep(0.15)
+            return ["https://shopee.co.id/Baterai-i.11.22"]
+        time.sleep(3)
+        return ["https://www.tokopedia.com/shop-a/baterai-aa-1"]
+
+    monkeypatch.setattr(service, "expand_listing", expand_listing)
+    started = time.monotonic()
+    result = service.search_marketplaces("baterai", limit=1, timeout_ms=5_000, budget_sec=0.6)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < 1.5
+    assert [item["url"] for item in result["items"]] == ["https://shopee.co.id/Baterai-i.11.22"]
+    late = {error["marketplace"] for error in result["errors"]}
+    assert late == {"tokopedia", "blibli", "alibaba"}
+    assert all("Batas waktu" in error["error"] for error in result["errors"])
 
 
 def test_is_product_url_still_filters_search_pages():
