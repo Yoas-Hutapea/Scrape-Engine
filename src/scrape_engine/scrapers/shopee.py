@@ -563,25 +563,30 @@ class ShopeeScraper(BaseScraper):
         cdp_url: str | None = None,
         active_tab: bool = False,
     ) -> Product:
+        deadline = time.monotonic() + max(timeout_ms, 1_000) / 1000
+
+        def left_ms() -> int:
+            return max(0, int((deadline - time.monotonic()) * 1000))
+
         shop_id, item_id = parse_shop_item_ids(url)
-        crawler = _crawler_product(url, timeout_ms)
-        if shop_id and item_id:
-            item = _httpx_item(url, shop_id, item_id, timeout_ms)
+        crawler = _crawler_product(url, left_ms()) if left_ms() > 500 else None
+        if shop_id and item_id and left_ms() > 500:
+            item = _httpx_item(url, shop_id, item_id, left_ms())
             if item:
                 return _parse_shopee_item(item, url)
 
-        if cdp_url:
+        if left_ms() > 500 and cdp_url:
             product = self._scrape_via_cdp(
                 url,
                 headed=headed,
-                timeout_ms=timeout_ms,
+                timeout_ms=left_ms(),
                 cdp_url=cdp_url,
                 active_tab=active_tab,
             )
             if product:
                 return product
-        else:
-            product = self._scrape_via_camoufox(url, headed=headed or None, timeout_ms=timeout_ms)
+        elif left_ms() > 500:
+            product = self._scrape_via_camoufox(url, headed=headed or None, timeout_ms=left_ms())
             if product:
                 return product
 

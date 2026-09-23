@@ -198,7 +198,7 @@ def fetch_rendered_html(
 
     thread = threading.Thread(target=worker, name="playwright-html", daemon=True)
     thread.start()
-    thread.join(timeout=max(45.0, (timeout_ms / 1000) + 45.0))
+    thread.join(timeout=max(5.0, (timeout_ms / 1000) + 5.0))
     if thread.is_alive():
         raise RuntimeError(f"Playwright fallback timed out for: {url}")
     if "err" in box:

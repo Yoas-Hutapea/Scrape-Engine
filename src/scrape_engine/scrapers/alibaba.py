@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from scrape_engine.fx import product_prices_to_idr
@@ -105,8 +106,13 @@ class AlibabaScraper(BaseScraper):
         default_currency = "CNY" if "1688.com" in url.lower() else "USD"
         html = ""
         final_url = url
+        deadline = time.monotonic() + max(timeout_ms, 1_000) / 1000
+
+        def left_ms() -> int:
+            return max(0, int((deadline - time.monotonic()) * 1000))
+
         try:
-            final_url, html = fetch_html(url, timeout_s=timeout_ms / 1000)
+            final_url, html = fetch_html(url, timeout_s=max(left_ms(), 1) / 1000)
         except Exception:
             html = ""
 
@@ -138,12 +144,13 @@ class AlibabaScraper(BaseScraper):
             return _finalize_alibaba_product(base)
 
         # Camoufox often bypasses Alibaba bot walls better than Chromium.
-        try:
-            from scrape_engine.scrapers.listing import open_listing_html
+        if left_ms() > 1_000:
+            try:
+                from scrape_engine.scrapers.listing import open_listing_html
 
-            final_url, html = open_listing_html(url, headed=headed or None, timeout_ms=timeout_ms)
-        except Exception:
-            final_url, html = url, ""
+                final_url, html = open_listing_html(url, headed=headed or None, timeout_ms=left_ms())
+            except Exception:
+                final_url, html = url, ""
 
         if html:
             base = product_from_meta_and_ld(html, final_url or url, default_currency=default_currency)
@@ -169,12 +176,14 @@ class AlibabaScraper(BaseScraper):
             if base and base.name != "Unknown Product":
                 return _finalize_alibaba_product(base)
 
+        if left_ms() <= 1_000:
+            raise RuntimeError(f"Batas waktu scrape tercapai sebelum halaman Alibaba selesai. URL: {url}")
         try:
             final_url, html = fetch_rendered_html(
                 url,
                 headed=headed,
-                timeout_ms=timeout_ms,
-                wait_ms=4000,
+                timeout_ms=left_ms(),
+                wait_ms=min(4000, left_ms()),
                 cdp_url=cdp_url,
                 active_tab=active_tab,
             )

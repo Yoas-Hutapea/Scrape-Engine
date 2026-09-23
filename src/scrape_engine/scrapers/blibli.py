@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+import time
 from typing import Any
 
 from scrape_engine.models import Product, Variant
@@ -120,8 +121,13 @@ class BlibliScraper(BaseScraper):
     ) -> Product:
         html = ""
         final_url = url
+        deadline = time.monotonic() + max(timeout_ms, 1_000) / 1000
+
+        def left_ms() -> int:
+            return max(0, int((deadline - time.monotonic()) * 1000))
+
         try:
-            final_url, html = fetch_html(url, timeout_s=timeout_ms / 1000)
+            final_url, html = fetch_html(url, timeout_s=max(left_ms(), 1) / 1000)
         except Exception:
             html = ""
 
@@ -138,11 +144,13 @@ class BlibliScraper(BaseScraper):
         if base and base.name != "Unknown Product":
             return base
 
+        if left_ms() <= 1_000:
+            raise RuntimeError(f"Batas waktu scrape tercapai sebelum halaman Blibli selesai. URL: {url}")
         final_url, html = fetch_rendered_html(
             url,
             headed=headed,
-            timeout_ms=timeout_ms,
-            wait_ms=3500,
+            timeout_ms=left_ms(),
+            wait_ms=min(3500, left_ms()),
             cdp_url=cdp_url,
             active_tab=active_tab,
         )

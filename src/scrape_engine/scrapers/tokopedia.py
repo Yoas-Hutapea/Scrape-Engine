@@ -605,21 +605,25 @@ class TokopediaScraper(BaseScraper):
         final_url = url
         cache: dict[str, Any] | None = None
         camoufox_error: str | None = None
+        deadline = time.monotonic() + max(timeout_ms, 1_000) / 1000
 
-        if cdp_url:
+        def left_ms() -> int:
+            return max(0, int((deadline - time.monotonic()) * 1000))
+
+        if cdp_url and left_ms() > 500:
             cache, html, final_url = self._cache_via_cdp(
                 url,
                 headed=headed,
-                timeout_ms=timeout_ms,
+                timeout_ms=left_ms(),
                 cdp_url=cdp_url,
                 active_tab=active_tab,
             )
-        else:
+        elif left_ms() > 500:
             try:
                 cache, html, final_url = _open_tokopedia_camoufox(
                     url,
                     headed=headed or None,
-                    timeout_ms=timeout_ms,
+                    timeout_ms=left_ms(),
                     wait_js=PDP_CACHE_READY,
                 )
             except Exception as exc:
@@ -637,7 +641,9 @@ class TokopediaScraper(BaseScraper):
                 priced = candidate
 
         try:
-            http_url, http_html = _fetch_html(url, timeout_s=timeout_ms / 1000)
+            if left_ms() <= 500:
+                raise RuntimeError("batas waktu")
+            http_url, http_html = _fetch_html(url, timeout_s=left_ms() / 1000)
             http_url = canonicalize_product_url(http_url or url)
             http_cache = _extract_tokopedia_cache(http_html)
             if http_cache and _entities_by_type(http_cache, "pdpBasicInfo"):
