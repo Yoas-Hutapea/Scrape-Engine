@@ -6,6 +6,7 @@ from typing import Any
 
 from scrape_engine.fx import product_prices_to_idr
 from scrape_engine.models import Product, Variant
+from scrape_engine.scrapers.antibot import CaptchaRequiredError, raise_if_blocked
 from scrape_engine.scrapers.base import BaseScraper
 from scrape_engine.scrapers.browser import fetch_rendered_html
 from scrape_engine.scrapers.common import (
@@ -149,6 +150,8 @@ class AlibabaScraper(BaseScraper):
                 from scrape_engine.scrapers.listing import open_listing_html
 
                 final_url, html = open_listing_html(url, headed=headed or None, timeout_ms=left_ms())
+            except CaptchaRequiredError:
+                raise
             except Exception:
                 final_url, html = url, ""
 
@@ -175,6 +178,8 @@ class AlibabaScraper(BaseScraper):
                     pass
             if base and base.name != "Unknown Product":
                 return _finalize_alibaba_product(base)
+            # Camoufox hit the slider/punish page; plain Chromium only fares worse.
+            raise_if_blocked(html, final_url, marketplace="alibaba", source_url=url)
 
         if left_ms() <= 1_000:
             raise RuntimeError(f"Batas waktu scrape tercapai sebelum halaman Alibaba selesai. URL: {url}")
@@ -191,8 +196,9 @@ class AlibabaScraper(BaseScraper):
             if base and base.name != "Unknown Product":
                 return _finalize_alibaba_product(base)
         except Exception:
-            pass
+            html = ""
 
+        raise_if_blocked(html, final_url, marketplace="alibaba", source_url=url)
         raise RuntimeError(
             "Alibaba memblokir ekstraksi produk (anti-bot). Coba lagi nanti atau tempel URL marketplace lain."
         )

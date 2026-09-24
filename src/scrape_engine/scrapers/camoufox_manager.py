@@ -7,7 +7,7 @@ import platform
 import threading
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Literal
+from typing import Any, Callable, Iterator, Literal
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 FINGERPRINT_FILE = "fingerprint.json"
@@ -59,6 +59,30 @@ def profile_dir() -> Path:
         path = Path(raw)
         return path if path.is_absolute() else (Path.cwd() / path).resolve()
     return (PROJECT_ROOT / "output" / "shopee-profile").resolve()
+
+
+# Marketplaces that get their own persistent profile so a captcha solved once by a
+# person (cookies such as cf_clearance / x5sec) is reused by later scrapes. Shopee
+# keeps the historical ``shopee-profile`` (profile_dir()).
+PROFILED_MARKETPLACES: tuple[str, ...] = ("blibli", "alibaba")
+
+
+def profiles_root() -> Path:
+    raw = os.getenv("CAMOUFOX_PROFILES_DIR", "").strip()
+    if raw:
+        path = Path(raw)
+        return path if path.is_absolute() else (Path.cwd() / path).resolve()
+    return (PROJECT_ROOT / "output" / "profiles").resolve()
+
+
+def marketplace_profile_dir(marketplace: str) -> Path:
+    if marketplace == "shopee":
+        return profile_dir()
+    return profiles_root() / marketplace
+
+
+class ProfileBusyError(RuntimeError):
+    """The profile is held by a captcha verification window."""
 
 
 def load_fingerprint_config(path: Path) -> dict[str, Any] | None:
@@ -114,15 +138,39 @@ def profile_exists() -> bool:
 class CamoufoxManager:
     """Shared persistent Camoufox context (same idea as scrapper-shopee BrowserManager)."""
 
-    def __init__(self) -> None:
+    def __init__(self, profile_path: Callable[[], Path] = profile_dir, name: str = "shopee") -> None:
         self._lock = threading.RLock()
         self._cm: Any = None
         self._context: Any = None
         self._owner: int | None = None
+        self._pinned_by: int | None = None
+        self._profile_path = profile_path
+        self.name = name
+
+    @property
+    def profile_path(self) -> Path:
+        return self._profile_path()
+
+    def pin(self) -> None:
+        """Reserve the profile for the calling thread (captcha verification window)."""
+        with self._lock:
+            self._pinned_by = threading.get_ident()
+
+    def unpin(self) -> None:
+        with self._lock:
+            if self._pinned_by == threading.get_ident():
+                self._pinned_by = None
+
+    @property
+    def is_pinned(self) -> bool:
+        return self._pinned_by is not None
 
     def get_context(self, *, headed: bool | None = None) -> Any:
         with self._lock:
             owner = threading.get_ident()
+            if self._pinned_by is not None and self._pinned_by != owner:
+                # Relaunching here would close the window a person is solving a captcha in.
+                raise ProfileBusyError(f"Profil {self.name} sedang dipakai verifikasi captcha.")
             if self._context is not None and self._owner != owner:
                 self._shutdown_locked()
             if self._context is not None:
@@ -135,7 +183,7 @@ class CamoufoxManager:
                     "Camoufox belum terpasang. Jalankan: pip install camoufox && python -m camoufox fetch"
                 ) from exc
 
-            dest = profile_dir()
+            dest = self.profile_path
             dest.mkdir(parents=True, exist_ok=True)
             fingerprint_path = dest / FINGERPRINT_FILE
             target_os = camoufox_os()
@@ -210,3 +258,19 @@ class CamoufoxManager:
 
 camoufox_manager = CamoufoxManager()
 atexit.register(camoufox_manager.close)
+
+_marketplace_managers: dict[str, CamoufoxManager] = {}
+_registry_lock = threading.Lock()
+
+
+def manager_for(marketplace: str | None) -> CamoufoxManager:
+    """Persistent Camoufox for ``marketplace`` (Shopee → the shared ``camoufox_manager``)."""
+    if not marketplace or marketplace == "shopee":
+        return camoufox_manager
+    with _registry_lock:
+        manager = _marketplace_managers.get(marketplace)
+        if manager is None:
+            manager = CamoufoxManager(lambda mp=marketplace: marketplace_profile_dir(mp), name=marketplace)
+            _marketplace_managers[marketplace] = manager
+            atexit.register(manager.close)
+        return manager

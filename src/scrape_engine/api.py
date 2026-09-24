@@ -381,6 +381,68 @@ def scrape_job(job_id: str) -> ScrapeJobResponse:
     return ScrapeJobResponse(**job)
 
 
+class VerifyStartRequest(BaseModel):
+    marketplace: str = Field(description="shopee | blibli | alibaba")
+    url: str | None = Field(
+        default=None,
+        description="Page that showed the captcha; must belong to the same marketplace",
+    )
+
+
+class VerifySessionResponse(BaseModel):
+    session_id: str
+    marketplace: str
+    url: str
+    status: Literal["starting", "waiting", "solved", "expired", "error", "cancelled"]
+    message: str | None = None
+    created_at: str
+    expires_at: str
+    timeout_sec: int
+    verified_at: str | None = None
+    viewer_url: str | None = None
+
+
+@app.post("/verify/sessions", response_model=VerifySessionResponse)
+def start_verification(body: VerifyStartRequest) -> Any:
+    """Open a headed window (server display / noVNC) so a person can solve the captcha once."""
+    from scrape_engine.verification import VerificationUnavailable, verification_store
+
+    try:
+        return verification_store.start(body.marketplace, body.url)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except VerificationUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/verify/sessions/{session_id}", response_model=VerifySessionResponse)
+def verification_session(session_id: str) -> Any:
+    from scrape_engine.verification import verification_store
+
+    session = verification_store.get(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Sesi verifikasi tidak ditemukan.")
+    return session
+
+
+@app.post("/verify/sessions/{session_id}/cancel", response_model=VerifySessionResponse)
+def cancel_verification(session_id: str) -> Any:
+    from scrape_engine.verification import verification_store
+
+    session = verification_store.cancel(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Sesi verifikasi tidak ditemukan.")
+    return session
+
+
+@app.get("/verify/status")
+def verification_status() -> dict[str, Any]:
+    """Display availability, noVNC URL and last verification per marketplace."""
+    from scrape_engine.verification import verification_store
+
+    return verification_store.status()
+
+
 @app.get("/")
 def root() -> JSONResponse:
     return JSONResponse(
@@ -392,6 +454,9 @@ def root() -> JSONResponse:
                 "scrape": "POST /scrape",
                 "scrape_job": "POST /scrape/jobs",
                 "products": "GET /products",
+                "verify_start": "POST /verify/sessions",
+                "verify_session": "GET /verify/sessions/{id}",
+                "verify_status": "GET /verify/status",
                 "shopee_search": "GET /shopee/search?q=",
                 "shopee_session": "GET /shopee/session",
             },

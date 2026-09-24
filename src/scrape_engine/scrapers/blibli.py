@@ -5,6 +5,7 @@ import time
 from typing import Any
 
 from scrape_engine.models import Product, Variant
+from scrape_engine.scrapers.antibot import CaptchaRequiredError, raise_if_blocked
 from scrape_engine.scrapers.base import BaseScraper
 from scrape_engine.scrapers.browser import fetch_rendered_html
 from scrape_engine.scrapers.common import (
@@ -144,6 +145,31 @@ class BlibliScraper(BaseScraper):
         if base and base.name != "Unknown Product":
             return base
 
+        # Blibli's persistent Camoufox profile carries the cookies of a captcha a person
+        # already solved (cf_clearance); plain HTTP / Chromium would hit the wall again.
+        if left_ms() > 1_000:
+            try:
+                from scrape_engine.scrapers.listing import open_listing_html
+
+                final_url, html = open_listing_html(url, headed=headed or None, timeout_ms=left_ms())
+            except CaptchaRequiredError:
+                raise
+            except Exception:
+                html = ""
+            if html:
+                next_data = extract_next_data(html)
+                base = product_from_meta_and_ld(html, final_url or url, default_currency="IDR")
+                if next_data:
+                    try:
+                        product = _product_from_blibli_next(next_data, final_url or url, base)
+                        if product.name and product.name != "Unknown Product":
+                            return product
+                    except Exception:
+                        pass
+                if base and base.name != "Unknown Product":
+                    return base
+                raise_if_blocked(html, final_url, marketplace="blibli", source_url=url)
+
         if left_ms() <= 1_000:
             raise RuntimeError(f"Batas waktu scrape tercapai sebelum halaman Blibli selesai. URL: {url}")
         final_url, html = fetch_rendered_html(
@@ -161,6 +187,8 @@ class BlibliScraper(BaseScraper):
                 return _product_from_blibli_next(next_data, final_url or url, base)
             except Exception:
                 pass
+        # A captcha page still yields an "Unknown Product" base; report it instead.
+        raise_if_blocked(html, final_url, marketplace="blibli", source_url=url)
         if base:
             return base
 

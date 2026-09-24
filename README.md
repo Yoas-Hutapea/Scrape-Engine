@@ -155,3 +155,17 @@ Login Shopee still needs a screen (captcha). Either:
 2. Install VNC / a desktop on Ubuntu, set `DISPLAY`, and run `setup-session` there.
 
 Keep `SHOPEE_HEADLESS=auto` (default). Override with `virtual` to force Xvfb, or `false` if a real display/VNC is attached.
+
+### Captcha verification (Shopee / Blibli / Alibaba)
+
+Pages that answer with a captcha / verify wall are reported as `code: "captcha_required"` and the
+rest of that marketplace is skipped. A person can then solve the captcha once in a headed browser on
+the server (Xvfb + noVNC); the engine keeps the per-marketplace Camoufox profile
+(`output/profiles/<marketplace>`) and reuses its cookies on later scrapes.
+
+- `POST /verify/sessions` `{"marketplace": "blibli", "url": "<page that showed the captcha>"}`
+- `GET /verify/sessions/{id}` → `starting | waiting | solved | expired | error | cancelled`
+- `POST /verify/sessions/{id}/cancel`
+- `GET /verify/status` → display availability, `VERIFY_VIEWER_URL`, last `verified_at` per marketplace
+
+Server setup (systemd units, noVNC behind a proxy): [deploy/ubuntu/README.md](deploy/ubuntu/README.md).

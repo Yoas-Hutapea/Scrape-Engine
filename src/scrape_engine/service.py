@@ -19,9 +19,10 @@ from scrape_engine.exporters.json_out import export_json, rows_as_ordered
 from scrape_engine.models import Product, flatten_products
 from scrape_engine.scrapers.alibaba import AlibabaScraper
 from scrape_engine.scrapers.amazon import AmazonScraper
+from scrape_engine.scrapers.antibot import CAPTCHA_REQUIRED, CaptchaRequiredError, error_entry
 from scrape_engine.scrapers.blibli import BlibliScraper
 from scrape_engine.scrapers.listing import collect_listing_urls
-from scrape_engine.scrapers.shopee import ShopeeScraper
+from scrape_engine.scrapers.shopee import REASON_ANTIBOT, ShopeeScraper
 from scrape_engine.scrapers.tokopedia import TokopediaScraper
 from scrape_engine.search_urls import SEARCHABLE_MARKETPLACES, keyword_listing_url
 
@@ -115,6 +116,8 @@ class ScrapeService:
                     for item in (result.get("items") or [])
                     if item.get("link")
                 ]
+                if not urls and result.get("reason") == REASON_ANTIBOT:
+                    raise CaptchaRequiredError("shopee", url, "verify/challenge on search")
             if len(urls) >= limit or (urls and not fill):
                 return urls[:limit]
             extra = collect_listing_urls(
@@ -181,11 +184,7 @@ class ScrapeService:
             ]
             return items, None
         except Exception as exc:
-            return [], {
-                "url": listing,
-                "error": str(exc),
-                "marketplace": marketplace.value,
-            }
+            return [], error_entry(exc, url=listing, marketplace=marketplace.value)
 
     def search_marketplaces(
         self,
@@ -258,11 +257,7 @@ class ScrapeService:
                         found[marketplace] = future.result()
                     except Exception as exc:
                         listing = keyword_listing_url(query, marketplace)
-                        found[marketplace] = ([], {
-                            "url": listing,
-                            "error": str(exc),
-                            "marketplace": marketplace.value,
-                        })
+                        found[marketplace] = ([], error_entry(exc, url=listing, marketplace=marketplace.value))
                 for future in pending:
                     marketplace = futures[future]
                     listing = keyword_listing_url(query, marketplace)
@@ -428,7 +423,7 @@ class ScrapeService:
                         "Bukan URL halaman produk (PDP) atau listing (/find, /search)."
                     )
             except Exception as exc:
-                result.errors.append({"url": url, "error": str(exc)})
+                result.errors.append(error_entry(exc, url=url, marketplace=_marketplace_of(url)))
 
         seen: set[str] = set()
         unique: list[str] = []
@@ -438,10 +433,21 @@ class ScrapeService:
             seen.add(url)
             unique.append(url)
 
+        # Once a marketplace shows a captcha wall, its remaining URLs would hit the same wall.
+        blocked: dict[str, CaptchaRequiredError] = {}
         for i, url in enumerate(unique):
             left = remaining()
             if left is not None and left <= 0:
                 result.errors.append(budget_error(url))
+                continue
+            marketplace = _marketplace_of(url)
+            if marketplace and marketplace in blocked:
+                result.errors.append({
+                    "url": url,
+                    "error": f"Dilewati: {marketplace.capitalize()} diblokir captcha.",
+                    "code": CAPTCHA_REQUIRED,
+                    "marketplace": marketplace,
+                })
                 continue
             page_timeout = timeout_ms
             if left is not None:
@@ -455,8 +461,12 @@ class ScrapeService:
                     active_tab=active_tab,
                 )
                 result.products.append(product)
+            except CaptchaRequiredError as exc:
+                blocked[exc.marketplace] = exc
+                result.errors.append(error_entry(exc, url=url))
+                continue
             except Exception as exc:
-                result.errors.append({"url": url, "error": str(exc)})
+                result.errors.append(error_entry(exc, url=url, marketplace=marketplace))
             left = remaining()
             if i < len(unique) - 1 and delay_sec > 0 and (left is None or left > delay_sec):
                 time.sleep(delay_sec)
@@ -512,3 +522,10 @@ class ScrapeService:
     @staticmethod
     def rows_payload(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         return rows_as_ordered(rows)
+
+
+def _marketplace_of(url: str) -> str | None:
+    try:
+        return detect_marketplace(url).value
+    except Exception:
+        return None

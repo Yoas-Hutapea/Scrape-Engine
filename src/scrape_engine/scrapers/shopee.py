@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from scrape_engine.models import Product, Variant
+from scrape_engine.scrapers.antibot import CaptchaRequiredError
 from scrape_engine.scrapers.base import BaseScraper
 from scrape_engine.scrapers.browser import goto_resilient, launch_page
 from scrape_engine.scrapers.common import meta_content, parse_money, product_from_meta_and_ld
@@ -598,7 +599,7 @@ class ShopeeScraper(BaseScraper):
             "2) login + selesaikan captcha  "
             "3) py -m scrape_engine.cli scrape URL"
         )
-        raise RuntimeError(f"Shopee blocked automated access (verify/challenge). {hint} URL: {url}")
+        raise CaptchaRequiredError("shopee", url, f"verify/challenge. {hint}")
 
     def search(
         self,
